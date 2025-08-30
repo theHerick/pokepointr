@@ -4371,38 +4371,81 @@
         });
 
         // Event listener para o formulário de perfil
-        document.getElementById('profileForm').addEventListener('submit', function(e) {
+        document.getElementById('profileForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            const currentUser = getCurrentUser();
-            const selectedAvatar = document.querySelector('.avatar-option.selected');
+            if (this.isSubmitting) {
+                console.log('🚫 Perfil já sendo salvo...');
+                return;
+            }
             
-            const profileData = {
-                nickname: document.getElementById('profileNickname').value,
-                description: document.getElementById('profileDescription').value,
-                avatar: selectedAvatar ? selectedAvatar.src : document.getElementById('currentAvatarPreview').src,
-                favoriteType: document.getElementById('profileFavoriteType').value,
-                city: document.getElementById('profileCity').value,
-                experience: document.getElementById('profileExperience').value,
-                lastUpdated: new Date().toISOString()
-            };
+            this.isSubmitting = true;
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = '💾 Salvando...';
+            submitBtn.disabled = true;
             
-            // Salvar perfil
-            localStorage.setItem('userProfile_' + currentUser, JSON.stringify(profileData));
-            
-            // Atualizar avatar no createPost
-            document.getElementById('createPostAvatar').src = profileData.avatar;
-            
-            // Atualizar avatar nos posts existentes do usuário
-            updateUserAvatarInPosts(currentUser, profileData.avatar);
-            
-            alert('✅ Perfil atualizado com sucesso!\n\n' +
-                  '👤 Nickname: ' + (profileData.nickname || 'Não definido') + '\n' +
-                  '📝 Descrição: ' + (profileData.description ? 'Atualizada' : 'Não definida') + '\n' +
-                  '🎮 Avatar: Atualizado\n' +
-                  '📍 Cidade: ' + (profileData.city || 'Não definida'));
-            
-            closeModal('profileModal');
+            try {
+                const currentUser = getCurrentUser();
+                const selectedAvatar = document.querySelector('.avatar-option.selected');
+                
+                const profileData = {
+                    nickname: document.getElementById('profileNickname').value.trim(),
+                    description: document.getElementById('profileDescription').value.trim(),
+                    avatar: selectedAvatar ? selectedAvatar.src : document.getElementById('currentAvatarPreview').src,
+                    favoriteType: document.getElementById('profileFavoriteType').value,
+                    city: document.getElementById('profileCity').value.trim(),
+                    experience: document.getElementById('profileExperience').value,
+                    lastUpdated: new Date().toISOString(),
+                    userEmail: currentUser ? currentUser.email : null
+                };
+                
+                // Salvar perfil localmente
+                const userKey = currentUser ? currentUser.email.split('@')[0] : 'guest';
+                localStorage.setItem('userProfile_' + userKey, JSON.stringify(profileData));
+                
+                // Salvar perfil no Firebase se usuário estiver logado
+                if (currentUser && currentUser.email) {
+                    try {
+                        const userProfileRef = database.ref(`${COLLECTION_NAME}/userProfiles/${currentUser.uid}`);
+                        await userProfileRef.set(profileData);
+                        console.log('✅ Perfil salvo no Firebase');
+                    } catch (firebaseError) {
+                        console.warn('⚠️ Erro ao salvar no Firebase, mantendo apenas local:', firebaseError);
+                    }
+                }
+                
+                // Atualizar avatar no createPost
+                const createPostAvatar = document.getElementById('createPostAvatar');
+                if (createPostAvatar) {
+                    createPostAvatar.src = profileData.avatar;
+                }
+                
+                // Atualizar avatar nos posts existentes do usuário
+                updateUserAvatarInPosts(currentUser, profileData.avatar);
+                
+                // Atualizar nome nos posts se nickname mudou
+                if (currentUser && currentUser.email) {
+                    updateUserNameInPosts(currentUser.email, profileData.nickname);
+                }
+                
+                alert('✅ Perfil atualizado com sucesso!\n\n' +
+                      '👤 Nickname: ' + (profileData.nickname || 'Não definido') + '\n' +
+                      '📝 Descrição: ' + (profileData.description ? 'Atualizada' : 'Não definida') + '\n' +
+                      '🎮 Avatar: Atualizado\n' +
+                      '📍 Cidade: ' + (profileData.city || 'Não definida') + '\n' +
+                      '🔥 Experiência: ' + (profileData.experience || 'Não definida'));
+                
+                closeModal('profileModal');
+                
+            } catch (error) {
+                console.error('Erro ao salvar perfil:', error);
+                alert('❌ Erro ao salvar perfil: ' + error.message);
+            } finally {
+                this.isSubmitting = false;
+                submitBtn.textContent = originalText;
+                submitBtn.disabled = false;
+            }
         });
 
         function updateUserAvatarInPosts(username, newAvatar) {
@@ -4413,22 +4456,92 @@
             });
         }
 
-        function loadUserProfile() {
-            const currentUser = getCurrentUser();
-            const savedProfile = localStorage.getItem('userProfile_' + currentUser);
+        function updateUserNameInPosts(userKey, newNickname) {
+            // Atualizar nome de usuário em posts existentes
+            if (!newNickname || !newNickname.trim()) return;
             
-            if (savedProfile) {
-                const profile = JSON.parse(savedProfile);
+            console.log(`🔄 Atualizando posts do usuário ${userKey} para ${newNickname}`);
+            
+            const posts = document.querySelectorAll('.post-card');
+            let updatedCount = 0;
+            
+            posts.forEach(post => {
+                const userNameElement = post.querySelector('.post-user-info h4');
+                const postUserAvatar = post.querySelector('.user-avatar');
                 
-                // Atualizar avatar no createPost
-                if (profile.avatar) {
-                    const createPostAvatar = document.getElementById('createPostAvatar');
-                    if (createPostAvatar) {
-                        createPostAvatar.src = profile.avatar;
+                if (userNameElement && postUserAvatar) {
+                    // Verificar se o post é do usuário atual através do onclick do avatar
+                    const onclickStr = postUserAvatar.getAttribute('onclick') || '';
+                    
+                    // Verificar múltiplas formas de identificar o usuário
+                    const isUserPost = onclickStr.includes(`'${userKey}'`) || 
+                                     onclickStr.includes(`"${userKey}"`) ||
+                                     onclickStr.includes(userKey);
+                    
+                    if (isUserPost) {
+                        const currentText = userNameElement.textContent;
+                        // Preservar a parte de curtidas se existir
+                        const likesMatch = currentText.match(/\((\d+) curtidas?\)/);
+                        const likesText = likesMatch ? ` ${likesMatch[0]}` : '';
+                        
+                        userNameElement.innerHTML = `${newNickname}${likesText}`;
+                        updatedCount++;
+                        console.log(`✅ Post atualizado: ${currentText} -> ${newNickname}${likesText}`);
+                    }
+                }
+            });
+            
+            console.log(`📊 Total de posts atualizados: ${updatedCount}`);
+        }
+
+        async function loadUserProfile() {
+            try {
+                const userKey = currentUser ? currentUser.email.split('@')[0] : 'guest';
+                let profile = null;
+                
+                // Tentar carregar do Firebase primeiro
+                if (currentUser && currentUser.uid) {
+                    try {
+                        const userProfileRef = database.ref(`${COLLECTION_NAME}/userProfiles/${currentUser.uid}`);
+                        const snapshot = await userProfileRef.once('value');
+                        if (snapshot.exists()) {
+                            profile = snapshot.val();
+                            // Salvar no localStorage como backup
+                            localStorage.setItem('userProfile_' + userKey, JSON.stringify(profile));
+                            console.log('✅ Perfil carregado do Firebase');
+                        }
+                    } catch (firebaseError) {
+                        console.warn('⚠️ Erro ao carregar do Firebase, tentando localStorage:', firebaseError);
                     }
                 }
                 
-                console.log('✅ Perfil do usuário carregado:', profile.nickname || currentUser);
+                // Fallback para localStorage se Firebase falhar
+                if (!profile) {
+                    const savedProfile = localStorage.getItem('userProfile_' + userKey);
+                    if (savedProfile) {
+                        profile = JSON.parse(savedProfile);
+                        console.log('✅ Perfil carregado do localStorage');
+                    }
+                }
+                
+                if (profile) {
+                    // Atualizar avatar no createPost
+                    if (profile.avatar) {
+                        const createPostAvatar = document.getElementById('createPostAvatar');
+                        if (createPostAvatar) {
+                            createPostAvatar.src = profile.avatar;
+                        }
+                    }
+                    
+                    console.log('✅ Perfil do usuário carregado:', profile.nickname || userKey);
+                    return profile;
+                } else {
+                    console.log('ℹ️ Nenhum perfil encontrado para o usuário');
+                    return null;
+                }
+            } catch (error) {
+                console.error('Erro ao carregar perfil:', error);
+                return null;
             }
         }
 
@@ -4438,10 +4551,25 @@
             console.log('getCurrentUser chamada - currentUser:', currentUser);
             console.log('getCurrentUser chamada - currentUserProfile:', currentUserProfile);
             
-            // Prioridade 1: Usuário do Firebase logado
+            // Prioridade 1: Nickname do perfil se disponível
             if (currentUser && currentUser.email) {
-                const userName = currentUser.email.split('@')[0];
-                console.log('Retornando usuário do Firebase:', userName);
+                const userEmail = currentUser.email;
+                const savedProfile = localStorage.getItem('userProfile_' + userEmail.split('@')[0]);
+                if (savedProfile) {
+                    try {
+                        const profile = JSON.parse(savedProfile);
+                        if (profile.nickname && profile.nickname.trim()) {
+                            console.log('Retornando nickname do perfil:', profile.nickname);
+                            return profile.nickname;
+                        }
+                    } catch (e) {
+                        console.warn('Erro ao carregar perfil:', e);
+                    }
+                }
+                
+                // Fallback para email cortado se não tiver nickname
+                const userName = userEmail.split('@')[0];
+                console.log('Retornando usuário do Firebase (sem nickname):', userName);
                 return userName;
             }
             
@@ -4456,7 +4584,21 @@
             if (userInfo && userInfo.style.display !== 'none') {
                 const userEmail = document.getElementById('userEmail');
                 if (userEmail && userEmail.textContent) {
-                    const userName = userEmail.textContent.split('@')[0];
+                    const email = userEmail.textContent;
+                    const savedProfile = localStorage.getItem('userProfile_' + email.split('@')[0]);
+                    if (savedProfile) {
+                        try {
+                            const profile = JSON.parse(savedProfile);
+                            if (profile.nickname && profile.nickname.trim()) {
+                                console.log('Retornando nickname do userEmail:', profile.nickname);
+                                return profile.nickname;
+                            }
+                        } catch (e) {
+                            console.warn('Erro ao carregar perfil do userEmail:', e);
+                        }
+                    }
+                    
+                    const userName = email.split('@')[0];
                     console.log('Retornando do userEmail:', userName);
                     return userName;
                 }
@@ -5275,6 +5417,9 @@
                 showPage('inicioPage'); // Página padrão
             }
             
+            // Carregar perfil do usuário
+            loadUserProfile();
+            
             // Carregar posts do Firebase
             loadPostsFromFirebase();
             
@@ -5341,12 +5486,50 @@
                 }
                 
                 // Renderizar posts do Firebase
-                feedContainer.innerHTML = posts.map(post => `
+                feedContainer.innerHTML = await Promise.all(posts.map(async post => {
+                    // Tentar obter nickname do perfil se disponível
+                    let displayName = post.user;
+                    try {
+                        if (post.user && post.user.includes('@')) {
+                            // Se for email, tentar buscar nickname do Firebase primeiro
+                            try {
+                                const userUID = post.userUID;
+                                if (userUID) {
+                                    const userProfileRef = database.ref(`${COLLECTION_NAME}/userProfiles/${userUID}`);
+                                    const profileSnapshot = await userProfileRef.once('value');
+                                    if (profileSnapshot.exists()) {
+                                        const profile = profileSnapshot.val();
+                                        if (profile.nickname && profile.nickname.trim()) {
+                                            displayName = profile.nickname;
+                                        }
+                                    }
+                                }
+                            } catch (firebaseError) {
+                                console.warn('Erro ao buscar perfil no Firebase para', post.user);
+                            }
+                            
+                            // Fallback para localStorage se Firebase não funcionar
+                            if (displayName === post.user) {
+                                const userKey = post.user.split('@')[0];
+                                const savedProfile = localStorage.getItem('userProfile_' + userKey);
+                                if (savedProfile) {
+                                    const profile = JSON.parse(savedProfile);
+                                    if (profile.nickname && profile.nickname.trim()) {
+                                        displayName = profile.nickname;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('Erro ao buscar nickname para', post.user, e);
+                    }
+                    
+                    return `
                     <div class="post-card" data-post-id="${post.id}">
                         <div class="post-header">
-                            <img src="${post.avatar || 'https://play.pokemonshowdown.com/sprites/trainers/brendan.png'}" alt="${post.user}" class="user-avatar" onclick="openUserProfile('${post.user}')" style="cursor: pointer;" title="Ver perfil de ${post.user}">
+                            <img src="${post.avatar || 'https://play.pokemonshowdown.com/sprites/trainers/brendan.png'}" alt="${displayName}" class="user-avatar" onclick="openUserProfile('${post.user}')" style="cursor: pointer;" title="Ver perfil de ${displayName}">
                             <div class="post-user-info">
-                                <h4>${post.user} ${post.verified ? '✅' : ''} <span class="likes-count">(${post.likes || 0} curtidas)</span></h4>
+                                <h4>${displayName} ${post.verified ? '✅' : ''} <span class="likes-count">(${post.likes || 0} curtidas)</span></h4>
                                 <span class="post-time">${formatTimeAgo(new Date(post.timestamp))}</span>
                             </div>
                         </div>
@@ -5394,7 +5577,8 @@
                             </div>
                         </div>
                     </div>
-                `).join('');
+                    `;
+                }).join('');
                 
                 console.log(`${posts.length} posts carregados do Firebase`);
                 
@@ -6110,6 +6294,104 @@
             torneio4: 25
         };
 
+        // ===== BACKEND COMMUNICATION =====
+        const BACKEND_URL = 'http://127.0.0.1:5000'; // URL do backend Python
+
+        // Função para fazer requisições para o backend
+        async function backendRequest(endpoint, method = 'GET', data = null) {
+            try {
+                const config = {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                };
+
+                if (data) {
+                    config.body = JSON.stringify(data);
+                }
+
+                const response = await fetch(`${BACKEND_URL}${endpoint}`, config);
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Erro na requisição');
+                }
+
+                return result;
+            } catch (error) {
+                console.error('Erro na comunicação com backend:', error);
+                throw error;
+            }
+        }
+
+        // Verificar se backend está online
+        async function checkBackendHealth() {
+            try {
+                const response = await fetch(`${BACKEND_URL}/health`);
+                const data = await response.json();
+                console.log('✅ Backend conectado:', data.status);
+                return true;
+            } catch (error) {
+                console.warn('⚠️ Backend offline - funcionalidades admin limitadas');
+                return false;
+            }
+        }
+
+        // ===== ADMIN FUNCTIONS (SECURE) =====
+        async function createPlayerSecure(name, points) {
+            try {
+                const result = await backendRequest('/api/admin/players', 'POST', {
+                    name: name,
+                    points: points,
+                    token: 'admin_token' // Em produção, usar token JWT real
+                });
+                return result;
+            } catch (error) {
+                throw new Error('Erro ao criar jogador: ' + error.message);
+            }
+        }
+
+        async function updatePointsSecure(playerName, newPoints, tournamentId) {
+            try {
+                const result = await backendRequest('/api/admin/points', 'PUT', {
+                    playerName: playerName,
+                    newPoints: newPoints,
+                    tournamentId: tournamentId,
+                    token: 'admin_token' // Em produção, usar token JWT real
+                });
+                return result;
+            } catch (error) {
+                throw new Error('Erro ao atualizar pontos: ' + error.message);
+            }
+        }
+
+        async function addAchievementSecure(playerName, achievementType, achievementData) {
+            try {
+                const result = await backendRequest('/api/admin/achievements', 'POST', {
+                    playerName: playerName,
+                    achievementType: achievementType,
+                    achievementData: achievementData,
+                    token: 'admin_token' // Em produção, usar token JWT real
+                });
+                return result;
+            } catch (error) {
+                throw new Error('Erro ao adicionar conquista: ' + error.message);
+            }
+        }
+
+        async function verifyAdminSecure(email) {
+            try {
+                const result = await backendRequest('/api/admin/verify', 'POST', {
+                    email: email
+                });
+                return result.isAdmin;
+            } catch (error) {
+                console.warn('Erro na verificação de admin:', error);
+                return false;
+            }
+        }
+
         // Cache para Pokémon
         let pokemonCache = {};
         let allPokemon = [];
@@ -6124,6 +6406,9 @@
         });
 
         function initializeApp() {
+            // Verificar conectividade com backend
+            checkBackendHealth();
+            
             auth.onAuthStateChanged(async user => {
                 currentUser = user;
                 if (user) {
@@ -6166,17 +6451,32 @@
             loadRankings();
         }
 
-        function checkAdminStatus(email) {
-            // Lista de emails de administradores
-            const adminEmails = [
-                'admin@pokepoint.com', 
-                'herick@gmail.com',
-                'herick.dev@gmail.com',
-                'admin@admin.com'
-            ];
-            if (adminEmails.includes(email)) {
-                isAdmin = true;
-                document.getElementById('adminBtn').classList.remove('hidden');
+        async function checkAdminStatus(email) {
+            try {
+                // Verificar status de admin usando backend seguro
+                const isAdminStatus = await verifyAdminSecure(email);
+                
+                if (isAdminStatus) {
+                    isAdmin = true;
+                    document.getElementById('adminBtn').classList.remove('hidden');
+                    console.log('✅ Admin verificado via backend');
+                } else {
+                    isAdmin = false;
+                    document.getElementById('adminBtn').classList.add('hidden');
+                }
+            } catch (error) {
+                console.warn('⚠️ Erro na verificação de admin, usando fallback local');
+                // Fallback para verificação local (apenas para desenvolvimento)
+                const adminEmails = [
+                    'admin@pokepoint.com', 
+                    'herick@gmail.com',
+                    'herick.dev@gmail.com',
+                    'admin@admin.com'
+                ];
+                if (adminEmails.includes(email)) {
+                    isAdmin = true;
+                    document.getElementById('adminBtn').classList.remove('hidden');
+                }
             }
         }
 
@@ -7357,89 +7657,34 @@
             const tournamentId = document.getElementById('tournament').value;
             
             try {
-                // Buscar jogador existente
-                const snapshot = await database.ref(`${COLLECTION_NAME}/players`).once('value');
-                const playersData = snapshot.val() || {};
+                // Usar backend seguro para atualizar pontos
+                const result = await updatePointsSecure(playerName, newTournamentPoints, tournamentId);
                 
-                let playerId = null;
-                let playerData = null;
-                
-                // Procurar jogador pelo nome
-                Object.keys(playersData).forEach(id => {
-                    if (playersData[id].name === playerName) {
-                        playerId = id;
-                        playerData = playersData[id];
-                    }
-                });
-                
-                if (!playerData) {
-                    // Criar novo jogador
-                    const limit = TOURNAMENT_LIMITS[tournamentId];
-                    const tournamentPoints = Math.min(newTournamentPoints, limit);
+                if (result.success) {
+                    const data = result.data;
+                    let message = `Pontuação atualizada com sucesso!\n\n`;
+                    message += `${data.tournament}: ${data.oldTournamentPoints} → ${data.newTournamentPoints}`;
                     
-                    const newPlayerRef = database.ref(`${COLLECTION_NAME}/players`).push();
-                    await newPlayerRef.set({
-                        name: playerName,
-                        totalPoints: tournamentPoints,
-                        tournaments: { [tournamentId]: tournamentPoints },
-                        teams: [],
-                        rating: 0
-                    });
-                    
-                    alert(`Jogador criado com ${tournamentPoints} pontos no torneio selecionado!`);
-                } else {
-                    // Atualizar jogador existente
-                    const currentTotalPoints = playerData.totalPoints || 0;
-                    const currentTournamentPoints = playerData.tournaments?.[tournamentId] || 0;
-                    
-                    // Verificar limite do torneio
-                    const limit = TOURNAMENT_LIMITS[tournamentId];
-                    if (newTournamentPoints > limit) {
-                        alert(`A pontuação máxima para este torneio é ${limit}!`);
-                        return;
+                    const difference = data.newTotalPoints - data.oldTotalPoints;
+                    if (difference > 0) {
+                        message += ` (+${difference})`;
+                    } else if (difference < 0) {
+                        message += ` (${difference})`;
                     }
                     
-                    if (newTournamentPoints < 0) {
-                        alert('A pontuação não pode ser negativa!');
-                        return;
-                    }
-                    
-                    // Calcular a diferença de pontos no torneio específico
-                    const tournamentDifference = newTournamentPoints - currentTournamentPoints;
-                    
-                    // Calcular novo total: total atual - pontos antigos do torneio + pontos novos do torneio
-                    const newTotalPoints = currentTotalPoints + tournamentDifference;
-                    
-                    // Atualizar dados do jogador
-                    const updatedTournaments = { ...playerData.tournaments };
-                    updatedTournaments[tournamentId] = newTournamentPoints;
-                    
-                    await database.ref(`${COLLECTION_NAME}/players/${playerId}`).update({
-                        totalPoints: newTotalPoints,
-                        tournaments: updatedTournaments
-                    });
-                    
-                    // Feedback mais claro
-                    let message = `Pontuação atualizada!\n\n`;
-                    message += `${tournamentsConfig[tournamentId]?.name || 'Torneio'}: ${currentTournamentPoints} → ${newTournamentPoints}`;
-                    
-                    if (tournamentDifference > 0) {
-                        message += ` (+${tournamentDifference})`;
-                    } else if (tournamentDifference < 0) {
-                        message += ` (${tournamentDifference})`;
-                    }
-                    
-                    message += `\nTotal geral: ${currentTotalPoints} → ${newTotalPoints}`;
+                    message += `\nTotal geral: ${data.oldTotalPoints} → ${data.newTotalPoints}`;
+                    message += `\nLimite do torneio: ${data.limit} pontos`;
                     
                     alert(message);
+                    document.getElementById('pointsForm').reset();
+                    loadRankings();
+                } else {
+                    throw new Error(result.error || 'Erro desconhecido');
                 }
-                
-                document.getElementById('pointsForm').reset();
-                loadRankings();
                 
             } catch (error) {
                 console.error('Erro ao atualizar pontuação:', error);
-                alert('Erro ao atualizar pontuação: ' + error.message);
+                alert('❌ Erro ao atualizar pontuação: ' + error.message);
             } finally {
                 this.isSubmitting = false;
                 submitBtn.textContent = originalText;
@@ -7467,46 +7712,22 @@
                     
                     const name = document.getElementById('newPlayerName').value;
                     const points = parseInt(document.getElementById('newPlayerPoints').value);
+                    
                     try {
-                        // Verificar se jogador já existe
-                        const snapshot = await database.ref(`${COLLECTION_NAME}/players`).once('value');
-                        const playersData = snapshot.val() || {};
+                        // Usar backend seguro para criar jogador
+                        const result = await createPlayerSecure(name, points);
                         
-                        let playerExists = false;
-                        Object.values(playersData).forEach(player => {
-                            if (player.name === name) {
-                                playerExists = true;
-                            }
-                        });
-                        
-                        if (playerExists) {
-                            alert('Já existe um jogador com esse nome!');
-                            return;
+                        if (result.success) {
+                            alert('✅ Jogador criado com sucesso!');
+                            document.getElementById('createPlayerForm').reset();
+                            loadRankings();
+                        } else {
+                            throw new Error(result.error || 'Erro desconhecido');
                         }
                         
-                        const tournaments = {
-                            torneio1: 0,
-                            torneio2: 0,
-                            torneio3: 0,
-                            torneio4: 0
-                        };
-                        
-                        const newPlayerRef = database.ref(`${COLLECTION_NAME}/players`).push();
-                        await newPlayerRef.set({
-                            name: name,
-                            totalPoints: points,
-                            tournaments: tournaments,
-                            teams: [],
-                            rating: 0,
-                            achievements: []
-                        });
-                        
-                        alert('Jogador criado com sucesso!');
-                        document.getElementById('createPlayerForm').reset();
-                        loadRankings();
                     } catch (error) {
                         console.error('Erro ao criar jogador:', error);
-                        alert('Erro ao criar jogador: ' + error.message);
+                        alert('❌ Erro ao criar jogador: ' + error.message);
                     } finally {
                         isSubmitting = false;
                         submitBtn.textContent = originalText;
