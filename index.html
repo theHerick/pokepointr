@@ -5275,17 +5275,11 @@
                 showPage('inicioPage'); // Página padrão
             }
             
-            // Carregar posts do Firebase (com fallback para posts de exemplo)
-            try {
-                loadPostsFromFirebase();
-            } catch (error) {
-                console.log('Firebase não configurado, carregando posts de exemplo...');
-                generateFeedPosts();
-                setTimeout(() => {
-                    initializeLikes();
-                    updateLikeStates();
-                }, 100);
-            }
+            // Carregar posts do Firebase
+            loadPostsFromFirebase();
+            
+            // Limpar posts de exemplo (executar uma vez)
+            cleanupSamplePosts();
             
             // Inicializar team display
             updateTeamDisplay();
@@ -5423,133 +5417,6 @@
             }
         }
 
-        // Gerar posts do feed
-        function generateFeedPosts() {
-            console.log('Gerando posts de exemplo...');
-            const feedContainer = document.querySelector('.posts-container');
-            if (!feedContainer) {
-                console.log('Container de posts não encontrado!');
-                return;
-            }
-
-            console.log('Container encontrado, gerando posts...');
-
-            // Posts exemplo para demonstração
-            const samplePosts = [
-                {
-                    id: 1,
-                    user: 'João Silva',
-                    avatar: 'https://play.pokemonshowdown.com/sprites/trainers/lucas.png',
-                    time: '2h',
-                    timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-                    content: 'Acabei de ganhar meu primeiro League Challenge! 🏆 Team foi incrível hoje.',
-                    tournament: 'League Challenge #1',
-                    placement: '1º lugar',
-                    team: ['charizard', 'grimmsnarl', 'dragapult', 'incineroar', 'rillaboom', 'whimsicott'],
-                    likes: 24,
-                    dislikes: 2,
-                    comments: 8,
-                    userLiked: false,
-                    userDisliked: false
-                },
-                {
-                    id: 2,
-                    user: 'Maria Santos',
-                    avatar: 'https://play.pokemonshowdown.com/sprites/trainers/dawn.png',
-                    time: '5h',
-                    timestamp: new Date(Date.now() - 5 * 60 * 60 * 1000),
-                    content: 'Treino pesado hoje! Alguém mais testando esse team anti-meta? 🤔',
-                    team: ['flutter-mane', 'annihilape', 'gholdengo', 'great-tusk', 'amoonguss', 'torkoal'],
-                    likes: 18,
-                    dislikes: 1,
-                    comments: 12,
-                    userLiked: false,
-                    userDisliked: false
-                },
-                {
-                    id: 3,
-                    user: 'Pedro Champion',
-                    avatar: 'https://play.pokemonshowdown.com/sprites/trainers/brendan.png',
-                    time: '1d',
-                    timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000),
-                    content: 'Regional foi massa! Top 8 com esse team maluco 😎',
-                    tournament: 'Regional São Paulo',
-                    placement: 'Top 8',
-                    team: ['koraidon', 'miraidon', 'flutter-mane', 'iron-hands', 'amoonguss', 'grimmsnarl'],
-                    likes: 156,
-                    dislikes: 8,
-                    comments: 43,
-                    userLiked: true,
-                    userDisliked: false
-                }
-            ];
-
-            feedContainer.innerHTML = samplePosts.map(post => `
-                <div class="post-card" data-post-id="${post.id}">
-                    <div class="post-header">
-                        <img src="${post.avatar}" alt="${post.user}" class="user-avatar" onclick="openUserProfile('${post.user}')" style="cursor: pointer;" title="Ver perfil de ${post.user}">
-                        <div class="post-user-info">
-                            <h4>${post.user} <span class="likes-count">(${post.likes || 0} curtidas)</span></h4>
-                            <span class="post-time">${post.time}</span>
-                        </div>
-                    </div>
-                    
-                    <div class="post-content">
-                        <p>${post.content}</p>
-                        
-                        ${post.tournament ? `
-                            <div class="tournament-result">
-                                <span class="tournament-badge">${post.tournament}</span>
-                                <span class="placement-badge">${post.placement}</span>
-                            </div>
-                        ` : ''}
-                        
-                        ${post.team ? `
-                            <div class="pokemon-team">
-                                ${post.team.map(pokemon => `
-                                    <img src="https://play.pokemonshowdown.com/sprites/ani/${pokemon}.gif" 
-                                         alt="${pokemon}" class="pokemon-sprite" title="${pokemon}">
-                                `).join('')}
-                            </div>
-                        ` : ''}
-                    </div>
-                    
-                    <div class="post-actions">
-                        <div class="post-actions-left">
-                            <button class="curtir-btn" data-post-id="${post.id}" onclick="curtirPost('${post.id}')">
-                                ❤️ Curtir
-                            </button>
-                            <button class="comentar-btn" onclick="toggleComments('${post.id}')">
-                                💬 Comentários (${post.comments || 0})
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <!-- Seção de comentários (oculta por padrão) -->
-                    <div class="comments-section" id="comments-${post.id}" style="display: none;">
-                        <div class="comments-list" id="comments-list-${post.id}">
-                            <!-- Comentários serão carregados aqui -->
-                        </div>
-                        <div class="comment-input">
-                            <img src="https://play.pokemonshowdown.com/sprites/trainers/brendan.png" class="comment-avatar">
-                            <input type="text" placeholder="Escreva um comentário..." onkeypress="handleCommentKeypress(event, ${post.id})" id="comment-input-${post.id}">
-                            <button onclick="addComment(${post.id})">💬</button>
-                        </div>
-                    </div>
-                </div>
-            `).join('');
-            
-            // Inicializar sistema de likes após renderizar
-            setTimeout(() => {
-                initializeLikes();
-                updateLikeStates();
-                // Sincronizar posts de exemplo com Firebase se necessário
-                syncSamplePostsToFirebase();
-            }, 100);
-            
-            console.log('✅ Posts de exemplo gerados com sucesso!');
-        }
-
         // SISTEMA DE CURTIDAS SIMPLES (baseado na lógica do dislike antigo)
         window.postCurtidas = {}; // Armazenar curtidas globalmente
         window.userCurtidas = {}; // Controlar o que cada usuário curtiu
@@ -5565,46 +5432,29 @@
                 console.log('✅ Sistema de curtidas inicializado com dados do Firebase');
             } catch (error) {
                 console.error('Erro ao inicializar curtidas:', error);
-                // Fallback para dados locais se Firebase falhar
-                const initialLikes = {
-                    1: 24,
-                    2: 18, 
-                    3: 156
-                };
-                
-                Object.keys(initialLikes).forEach(postId => {
-                    window.postCurtidas[postId] = initialLikes[postId];
-                    atualizarContadorCurtidas(postId);
-                });
-                console.log('✅ Sistema de curtidas inicializado com dados locais (fallback)');
+                console.log('🚫 Sem dados de fallback - usando apenas posts reais do Firebase');
             }
         }
 
-        // Sincronizar posts de exemplo com Firebase
-        async function syncSamplePostsToFirebase() {
+        // Função para limpar posts de exemplo do Firebase (executar uma vez)
+        async function cleanupSamplePosts() {
             try {
-                const samplePosts = {
-                    1: { likes: 24 },
-                    2: { likes: 18 },
-                    3: { likes: 156 }
-                };
+                console.log('🧹 Limpando posts de exemplo...');
+                const postsRef = database.ref(`${COLLECTION_NAME}/posts`);
+                const snapshot = await postsRef.once('value');
+                const posts = snapshot.val() || {};
                 
-                // Verificar e criar posts de exemplo no Firebase se não existirem
-                for (const [postId, data] of Object.entries(samplePosts)) {
-                    const postRef = database.ref(`${COLLECTION_NAME}/posts/${postId}`);
-                    const snapshot = await postRef.once('value');
-                    
-                    if (!snapshot.exists()) {
-                        // Criar post de exemplo no Firebase
-                        await postRef.update({
-                            likes: data.likes,
-                            samplePost: true
-                        });
-                        console.log(`✅ Post de exemplo ${postId} sincronizado com Firebase`);
+                // Remover posts marcados como samplePost ou com IDs 1, 2, 3
+                for (const [postId, postData] of Object.entries(posts)) {
+                    if (postData.samplePost === true || ['1', '2', '3'].includes(postId)) {
+                        await database.ref(`${COLLECTION_NAME}/posts/${postId}`).remove();
+                        console.log(`🗑️ Post de exemplo removido: ${postId}`);
                     }
                 }
+                
+                console.log('✅ Limpeza de posts de exemplo concluída');
             } catch (error) {
-                console.error('Erro ao sincronizar posts de exemplo:', error);
+                console.error('Erro ao limpar posts de exemplo:', error);
             }
         }
 
@@ -5617,6 +5467,16 @@
                 showLoginModal();
                 return;
             }
+            
+            // Verificar se já está processando
+            if (window.curtindoPost && window.curtindoPost[postId]) {
+                console.log('🚫 Curtida já em andamento...');
+                return;
+            }
+            
+            // Inicializar flag de processamento
+            if (!window.curtindoPost) window.curtindoPost = {};
+            window.curtindoPost[postId] = true;
             
             const userId = currentUser.uid;
             
@@ -5680,6 +5540,11 @@
                 console.error('❌ Erro ao curtir post:', error);
                 alert('❌ Erro ao curtir post: ' + error.message);
             } finally {
+                // Limpar flag de processamento
+                if (window.curtindoPost) {
+                    window.curtindoPost[postId] = false;
+                }
+                
                 // Reabilitar botão
                 const curtirBtn = document.querySelector(`[data-post-id="${postId}"] .curtir-btn`);
                 if (curtirBtn) curtirBtn.disabled = false;
@@ -6058,12 +5923,23 @@
         document.getElementById('createPostForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
+            if (this.isSubmitting) {
+                console.log('🚫 Criação de post já em andamento...');
+                return;
+            }
+            
             // Verificar se o usuário está logado
             if (!currentUser) {
                 alert('❌ Você precisa fazer login para criar posts!');
                 showLoginModal();
                 return;
             }
+            
+            this.isSubmitting = true;
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = 'Criando...';
+            submitBtn.disabled = true;
             
             try {
                 const currentUserName = getCurrentUser();
@@ -6139,6 +6015,10 @@
             } catch (error) {
                 console.error('Erro ao publicar post:', error);
                 alert('❌ Erro ao publicar post: ' + error.message);
+            } finally {
+                this.isSubmitting = false;
+                submitBtn.textContent = originalText;
+                submitBtn.disabled = false;
             }
         });
 
@@ -6349,6 +6229,18 @@
 
         document.getElementById('loginForm').addEventListener('submit', function(e) {
             e.preventDefault();
+            
+            if (this.isSubmitting) {
+                console.log('🚫 Login já em andamento...');
+                return;
+            }
+            
+            this.isSubmitting = true;
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = 'Entrando...';
+            submitBtn.disabled = true;
+            
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
             
@@ -6358,6 +6250,11 @@
                 })
                 .catch(error => {
                     alert('Erro no login: ' + error.message);
+                })
+                .finally(() => {
+                    this.isSubmitting = false;
+                    submitBtn.textContent = originalText;
+                    submitBtn.disabled = false;
                 });
         });
 
@@ -7444,6 +7341,17 @@
         document.getElementById('pointsForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
+            if (this.isSubmitting) {
+                console.log('🚫 Submissão de pontos já em andamento...');
+                return;
+            }
+            
+            this.isSubmitting = true;
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = 'Atualizando...';
+            submitBtn.disabled = true;
+            
             const playerName = document.getElementById('playerName').value;
             const newTournamentPoints = parseInt(document.getElementById('newPoints').value);
             const tournamentId = document.getElementById('tournament').value;
@@ -7532,14 +7440,31 @@
             } catch (error) {
                 console.error('Erro ao atualizar pontuação:', error);
                 alert('Erro ao atualizar pontuação: ' + error.message);
+            } finally {
+                this.isSubmitting = false;
+                submitBtn.textContent = originalText;
+                submitBtn.disabled = false;
             }
         });
 
         document.addEventListener('DOMContentLoaded', function() {
             const createPlayerForm = document.getElementById('createPlayerForm');
             if (createPlayerForm) {
+                let isSubmitting = false; // Flag para evitar múltiplas submissões
                 createPlayerForm.addEventListener('submit', async function(e) {
                     e.preventDefault();
+                    
+                    if (isSubmitting) {
+                        console.log('🚫 Criação de jogador já em andamento...');
+                        return;
+                    }
+                    
+                    isSubmitting = true;
+                    const submitBtn = this.querySelector('button[type="submit"]');
+                    const originalText = submitBtn.textContent;
+                    submitBtn.textContent = 'Criando...';
+                    submitBtn.disabled = true;
+                    
                     const name = document.getElementById('newPlayerName').value;
                     const points = parseInt(document.getElementById('newPlayerPoints').value);
                     try {
@@ -7582,6 +7507,10 @@
                     } catch (error) {
                         console.error('Erro ao criar jogador:', error);
                         alert('Erro ao criar jogador: ' + error.message);
+                    } finally {
+                        isSubmitting = false;
+                        submitBtn.textContent = originalText;
+                        submitBtn.disabled = false;
                     }
                 });
             }
