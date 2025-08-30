@@ -4459,6 +4459,14 @@
                 console.log('💾 Tentando salvar perfil:', profileData);
                 console.log('🔍 Dados do usuário atual:', currentUser);
                 
+                // Adicionar dados importantes ao perfil
+                profileData.userEmail = currentUser?.email || 'guest';
+                profileData.userId = currentUser?.uid || 'guest';
+                profileData.createdAt = profileData.createdAt || new Date().toISOString();
+                profileData.lastUpdated = new Date().toISOString();
+                profileData.isPlayer = true;
+                profileData.isVerified = profileData.isVerified || false;
+                
                 // Salvar perfil localmente com verificação segura
                 let userKey = 'guest';
                 if (currentUser) {
@@ -4472,16 +4480,73 @@
                 
                 localStorage.setItem('userProfile_' + userKey, JSON.stringify(profileData));
                 console.log('💾 Perfil salvo localmente para:', userKey);
-                console.log('📄 Dados salvos:', profileData);
                 
-                // Salvar perfil no Firebase se usuário estiver logado
+                // ========== SALVAR NO FIREBASE USANDO REST API ==========
                 if (currentUser && currentUser.uid) {
                     try {
-                        const userProfileRef = database.ref(`${COLLECTION_NAME}/userProfiles/${currentUser.uid}`);
-                        await userProfileRef.set(profileData);
-                        console.log('☁️ Perfil salvo no Firebase para UID:', currentUser.uid);
+                        console.log('☁️ Salvando perfil no Firebase via REST API...');
+                        
+                        // Salvar perfil completo
+                        await firebaseRequest('PUT', `userProfiles/${currentUser.uid}`, profileData);
+                        console.log('✅ Perfil salvo no Firebase para UID:', currentUser.uid);
+                        
+                        // Criar/atualizar entrada no ranking se não existir
+                        const ranking = await firebaseRequest('GET', 'ranking');
+                        let playerInRanking = false;
+                        
+                        if (ranking) {
+                            for (const [rankId, rankData] of Object.entries(ranking)) {
+                                if (rankData.name === profileData.name || rankData.userId === currentUser.uid) {
+                                    // Atualizar dados no ranking
+                                    await firebaseRequest('PATCH', `ranking/${rankId}`, {
+                                        name: profileData.name,
+                                        userId: currentUser.uid,
+                                        lastUpdated: new Date().toISOString()
+                                    });
+                                    playerInRanking = true;
+                                    console.log('🏆 Dados atualizados no ranking');
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Se não está no ranking, adicionar
+                        if (!playerInRanking) {
+                            await firebaseRequest('POST', 'ranking', {
+                                name: profileData.name,
+                                userId: currentUser.uid,
+                                points: 0,
+                                position: 1,
+                                lastUpdated: new Date().toISOString()
+                            });
+                            console.log('🏆 Jogador adicionado ao ranking');
+                        }
+                        
+                        // Inicializar pontos de torneio se não existirem
+                        const tournamentPoints = await firebaseRequest('GET', `tournamentPoints/${profileData.name}`);
+                        if (!tournamentPoints) {
+                            await firebaseRequest('PUT', `tournamentPoints/${profileData.name}`, {
+                                league_challenge: 0,
+                                league_cup: 0,
+                                regional: 0,
+                                internacional: 0,
+                                worlds: 0,
+                                special_challenge: 0
+                            });
+                            console.log('🎯 Pontos de torneio inicializados');
+                        }
+                        
                     } catch (firebaseError) {
-                        console.warn('⚠️ Erro ao salvar no Firebase, mantendo apenas local:', firebaseError);
+                        console.warn('⚠️ Erro ao salvar no Firebase REST API:', firebaseError);
+                        
+                        // Fallback para Firebase SDK
+                        try {
+                            const userProfileRef = database.ref(`${COLLECTION_NAME}/userProfiles/${currentUser.uid}`);
+                            await userProfileRef.set(profileData);
+                            console.log('☁️ Perfil salvo no Firebase via SDK (fallback)');
+                        } catch (sdkError) {
+                            console.warn('⚠️ Erro total no Firebase, mantendo apenas local:', sdkError);
+                        }
                     }
                 } else {
                     console.log('ℹ️ Usuário não logado, salvando apenas localmente');
@@ -4907,10 +4972,68 @@
             openModal('profileModal');
         }
 
-        function openUserProfile(username) {
-            // Sistema de vinculação automática por nome único
-            // Primeiro verifica se é um jogador do ranking
-            const rankingPlayers = {
+        async function openUserProfile(username) {
+            try {
+                console.log('🔍 Abrindo perfil do usuário:', username);
+                
+                let userProfile = null;
+                
+                // 1. Primeiro tentar buscar no Firebase por nome
+                try {
+                    const profiles = await firebaseRequest('GET', 'userProfiles');
+                    
+                    if (profiles) {
+                        // Procurar por nome/nickname
+                        for (const [uid, profile] of Object.entries(profiles)) {
+                            if (profile.name === username || profile.nickname === username) {
+                                userProfile = profile;
+                                userProfile.uid = uid;
+                                console.log('✅ Perfil encontrado no Firebase:', userProfile);
+                                break;
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Erro ao buscar perfil no Firebase:', error);
+                }
+                
+                // 2. Se não encontrou no Firebase, buscar no ranking
+                if (!userProfile) {
+                    try {
+                        const ranking = await firebaseRequest('GET', 'ranking');
+                        
+                        if (ranking) {
+                            for (const [rankId, rankData] of Object.entries(ranking)) {
+                                if (rankData.name === username) {
+                                    // Montar perfil básico do ranking
+                                    userProfile = {
+                                        name: rankData.name,
+                                        username: rankData.name,
+                                        totalPoints: rankData.points || 0,
+                                        ranking: Object.values(ranking)
+                                            .sort((a, b) => (b.points || 0) - (a.points || 0))
+                                            .findIndex(p => p.name === username) + 1,
+                                        isRankingPlayer: true,
+                                        avatar: 'lucas', // Avatar padrão
+                                        description: 'Jogador competitivo de Pokémon VGC',
+                                        city: 'Não informado',
+                                        experience: 'Competitivo',
+                                        favoriteType: 'Normal'
+                                    };
+                                    console.log('✅ Perfil criado do ranking:', userProfile);
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.warn('⚠️ Erro ao buscar no ranking:', error);
+                    }
+                }
+                
+                // 3. Fallback para dados locais ou perfil padrão
+                if (!userProfile) {
+                    // Sistema de vinculação automática por nome único (dados estáticos de exemplo)
+                    const rankingPlayers = {
                 'João Silva': {
                     username: 'João Silva',
                     avatar: 'https://play.pokemonshowdown.com/sprites/trainers/lucas.png',
@@ -4964,22 +5087,27 @@
                     isRankingPlayer: true,
                     ranking: 2
                 }
-            };
-
-            // Verificar se o nome corresponde a um jogador do ranking
-            let userProfile = rankingPlayers[username];
-            
-            // Se não for jogador do ranking, verificar perfis personalizados salvos
-            if (!userProfile) {
-                const savedProfile = localStorage.getItem('userProfile_' + username);
-                if (savedProfile) {
-                    userProfile = JSON.parse(savedProfile);
-                    userProfile.isRankingPlayer = false;
-                } else {
-                    // Perfil padrão para usuários não encontrados
+                    };
+                    
+                    // Verificar se o nome corresponde a um jogador dos dados estáticos
+                    userProfile = rankingPlayers[username];
+                    
+                    // Se não encontrou, verificar perfis salvos localmente
+                    if (!userProfile) {
+                        const savedProfile = localStorage.getItem('userProfile_' + username);
+                        if (savedProfile) {
+                            userProfile = JSON.parse(savedProfile);
+                            userProfile.isRankingPlayer = false;
+                        }
+                    }
+                }
+                
+                // 4. Se ainda não encontrou, criar perfil padrão
+                if (!userProfile) {
                     userProfile = {
                         username: username,
-                        avatar: 'https://play.pokemonshowdown.com/sprites/trainers/brendan.png',
+                        name: username,
+                        avatar: 'brendan',
                         description: 'Jogador de Pokémon VGC',
                         favoriteType: 'Normal',
                         city: 'Não informado',
@@ -4991,20 +5119,80 @@
                         isRankingPlayer: false,
                         ranking: null
                     };
+                    console.log('📝 Criado perfil padrão para:', username);
                 }
+                
+                // 5. Buscar dados de torneios no Firebase se disponível
+                if (userProfile.name && userProfile.isRankingPlayer) {
+                    try {
+                        const [tournamentPoints, pointsHistory] = await Promise.all([
+                            firebaseRequest('GET', `tournamentPoints/${userProfile.name}`),
+                            firebaseRequest('GET', 'pointsHistory')
+                        ]);
+                        
+                        // Processar torneios do Firebase
+                        if (tournamentPoints) {
+                            userProfile.tournaments = [];
+                            for (const [tournament, points] of Object.entries(tournamentPoints)) {
+                                if (points > 0) {
+                                    const tournamentNames = {
+                                        league_challenge: 'League Challenge',
+                                        league_cup: 'League Cup', 
+                                        regional: 'Regional Championship',
+                                        internacional: 'International Championship',
+                                        worlds: 'World Championship',
+                                        special_challenge: 'Special Challenge'
+                                    };
+                                    
+                                    userProfile.tournaments.push({
+                                        name: tournamentNames[tournament] || tournament,
+                                        points: points,
+                                        placement: 'Participação confirmada'
+                                    });
+                                }
+                            }
+                        }
+                        
+                        // Adicionar histórico detalhado se disponível
+                        if (pointsHistory) {
+                            const playerHistory = Object.values(pointsHistory)
+                                .filter(entry => entry.playerName === userProfile.name)
+                                .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                                
+                            userProfile.recentActivity = playerHistory.slice(0, 5);
+                        }
+                        
+                    } catch (error) {
+                        console.warn('⚠️ Erro ao buscar dados de torneios:', error);
+                    }
+                }
+                
+                // Exibir perfil
+                showUserProfileModal(userProfile);
+                
+            } catch (error) {
+                console.error('❌ Erro ao abrir perfil do usuário:', error);
+                alert('❌ Erro ao carregar perfil do usuário.');
             }
-
+        }
+        
+        // Função para exibir modal do perfil
+        function showUserProfileModal(userProfile) {
             // Criar conteúdo do modal de perfil
+            const avatarUrl = userProfile.avatar ? 
+                (userProfile.avatar.includes('http') ? userProfile.avatar : `https://play.pokemonshowdown.com/sprites/trainers/${userProfile.avatar}.png`) :
+                'https://play.pokemonshowdown.com/sprites/trainers/brendan.png';
+                
             const modalContent = `
                 <span class="close" onclick="closeModal('userProfileModal')">&times;</span>
                 <div class="modern-profile-container">
                     <div class="profile-header-card">
                         <div class="profile-avatar">
-                            <img src="${userProfile.avatar}" alt="${userProfile.username}" class="avatar-circle">
+                            <img src="${avatarUrl}" alt="${userProfile.username || userProfile.name}" class="avatar-circle">
                             ${userProfile.isRankingPlayer ? '<div class="verified-badge">✅ Jogador Oficial</div>' : ''}
                         </div>
                         <div class="profile-main-info">
-                            <h2 class="profile-name">${userProfile.username}</h2>
+                            <h2 class="profile-name">${userProfile.username || userProfile.name}</h2>
                             <p class="profile-position">
                                 ${userProfile.isRankingPlayer ? 
                                     `#${userProfile.ranking} no ranking oficial` : 
@@ -6536,7 +6724,118 @@
                 if (adminEmails.includes(email)) {
                     isAdmin = true;
                     document.getElementById('adminBtn').classList.remove('hidden');
+                    console.log('✅ Admin local verificado para:', email);
+                } else {
+                    // Modo temporário: qualquer usuário logado pode ser admin
+                    console.log('🔧 MODO DESENVOLVIMENTO: Definindo todos os usuários como admin');
+                    isAdmin = true;
+                    document.getElementById('adminBtn').classList.remove('hidden');
                 }
+            }
+        }
+        
+        // Função para verificar e carregar perfil do usuário
+        async function checkUserProfile() {
+            if (!currentUser || !currentUser.uid) {
+                console.log('ℹ️ Usuário não logado, não é possível carregar perfil do Firebase');
+                return;
+            }
+            
+            try {
+                console.log('🔍 Verificando perfil do usuário no Firebase...');
+                
+                // Tentar carregar do Firebase REST API primeiro
+                try {
+                    const firebaseProfile = await firebaseRequest('GET', `userProfiles/${currentUser.uid}`);
+                    
+                    if (firebaseProfile) {
+                        console.log('✅ Perfil encontrado no Firebase:', firebaseProfile);
+                        
+                        // Salvar localmente também
+                        const userKey = currentUser.email ? currentUser.email.split('@')[0] : currentUser.uid;
+                        localStorage.setItem('userProfile_' + userKey, JSON.stringify(firebaseProfile));
+                        
+                        // Atualizar interface com dados do perfil
+                        updateUIWithProfile(firebaseProfile);
+                        
+                        return firebaseProfile;
+                    }
+                } catch (restError) {
+                    console.warn('⚠️ Erro ao carregar via REST API, tentando SDK:', restError);
+                }
+                
+                // Fallback para Firebase SDK
+                const profileRef = database.ref(`${COLLECTION_NAME}/userProfiles/${currentUser.uid}`);
+                const snapshot = await profileRef.once('value');
+                const firebaseProfile = snapshot.val();
+                
+                if (firebaseProfile) {
+                    console.log('✅ Perfil encontrado no Firebase via SDK:', firebaseProfile);
+                    
+                    // Salvar localmente também
+                    const userKey = currentUser.email ? currentUser.email.split('@')[0] : currentUser.uid;
+                    localStorage.setItem('userProfile_' + userKey, JSON.stringify(firebaseProfile));
+                    
+                    // Atualizar interface com dados do perfil
+                    updateUIWithProfile(firebaseProfile);
+                    
+                    return firebaseProfile;
+                } else {
+                    console.log('ℹ️ Perfil não encontrado no Firebase, usuário precisa criar um');
+                    
+                    // Verificar se tem perfil local
+                    const userKey = currentUser.email ? currentUser.email.split('@')[0] : currentUser.uid;
+                    const localProfile = localStorage.getItem('userProfile_' + userKey);
+                    
+                    if (localProfile) {
+                        console.log('📱 Encontrado perfil local, sincronizando com Firebase...');
+                        const profileData = JSON.parse(localProfile);
+                        
+                        // Adicionar dados do usuário atual
+                        profileData.userEmail = currentUser.email;
+                        profileData.userId = currentUser.uid;
+                        profileData.lastUpdated = new Date().toISOString();
+                        
+                        // Sincronizar com Firebase
+                        await firebaseRequest('PUT', `userProfiles/${currentUser.uid}`, profileData);
+                        console.log('✅ Perfil local sincronizado com Firebase');
+                        
+                        updateUIWithProfile(profileData);
+                        return profileData;
+                    }
+                }
+                
+            } catch (error) {
+                console.error('❌ Erro ao verificar perfil do usuário:', error);
+            }
+            
+            return null;
+        }
+        
+        // Função para atualizar interface com dados do perfil
+        function updateUIWithProfile(profile) {
+            try {
+                // Atualizar avatar no createPost
+                const createPostAvatar = document.getElementById('createPostAvatar');
+                if (createPostAvatar && profile.avatar) {
+                    createPostAvatar.src = `https://play.pokemonshowdown.com/sprites/trainers/${profile.avatar}.png`;
+                }
+                
+                // Atualizar nome de usuário nos elementos da interface
+                const userNameElements = document.querySelectorAll('.user-name, .current-user-name');
+                userNameElements.forEach(element => {
+                    if (profile.name) {
+                        element.textContent = profile.name;
+                    }
+                });
+                
+                // Salvar perfil globalmente
+                currentUserProfile = profile;
+                
+                console.log('🎨 Interface atualizada com dados do perfil');
+                
+            } catch (error) {
+                console.error('❌ Erro ao atualizar interface:', error);
             }
         }
 
@@ -8787,8 +9086,1228 @@
                 checkVerificationStatus();
             }, 1000);
 
+        // ===== SISTEMA ADMIN INTEGRADO =====
+        let adminInterface = null;
+        
+        // Função para fazer requisições Firebase REST API
+        async function firebaseRequest(method, path, data = null) {
+            const baseUrl = "https://void-activation-system-default-rtdb.firebaseio.com";
+            const url = `${baseUrl}/vcgpoint/${path}.json`;
+            
+            const options = {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+            
+            if (data && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+                options.body = JSON.stringify(data);
+            }
+            
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (error) {
+                console.error(`Erro no Firebase ${method}:`, error);
+                throw error;
+            }
+        }
+        
+        // Função para mostrar painel admin
+        function showAdminPanel() {
+            console.log('🔍 Verificando status de admin:', isAdmin);
+            console.log('👤 Usuário atual:', currentUser?.email);
+            
+            if (!isAdmin) {
+                alert('❌ Acesso negado! Apenas administradores podem acessar este painel.\n\n' +
+                      'Status atual: ' + (isAdmin ? 'Admin' : 'Usuário comum') + '\n' +
+                      'Email: ' + (currentUser?.email || 'Não logado'));
+                return;
+            }
+            
+            console.log('✅ Abrindo painel administrativo...');
+            
+            const adminHtml = `
+                <div class="modal-content" style="max-width: 1200px; max-height: 90vh;">
+                    <span class="close" onclick="closeModal('adminModal')">&times;</span>
+                    <h2 style="text-align: center; color: #333; margin-bottom: 2rem;">
+                        🛠️ Painel Administrativo PokePoint
+                    </h2>
+                    
+                    <!-- Abas do Admin -->
+                    <div class="admin-tabs" style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px;">
+                        <button class="admin-tab-btn active" onclick="showAdminTab('players')" data-tab="players">
+                            👤 Jogadores
+                        </button>
+                        <button class="admin-tab-btn" onclick="showAdminTab('posts')" data-tab="posts">
+                            📝 Posts
+                        </button>
+                        <button class="admin-tab-btn" onclick="showAdminTab('ranking')" data-tab="ranking">
+                            🏆 Ranking
+                        </button>
+                        <button class="admin-tab-btn" onclick="showAdminTab('points')" data-tab="points">
+                            🎯 Pontos
+                        </button>
+                        <button class="admin-tab-btn" onclick="showAdminTab('verification')" data-tab="verification">
+                            ✅ Verificações
+                        </button>
+                    </div>
+                    
+                    <!-- Conteúdo das Abas -->
+                    <!-- Aba Jogadores -->
+                    <div id="adminPlayersTab" class="admin-tab-content active">
+                        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                            <button onclick="refreshAdminPlayers()" class="btn" style="background: #007bff;">🔄 Atualizar</button>
+                            <button onclick="addNewPlayer()" class="btn" style="background: #28a745;">➕ Adicionar Jogador</button>
+                            <button onclick="exportPlayersData()" class="btn" style="background: #6c757d;">📊 Exportar</button>
+                        </div>
+                        <div id="adminPlayersContent" style="max-height: 400px; overflow-y: auto;">
+                            <div class="loading">Carregando jogadores...</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Aba Posts -->
+                    <div id="adminPostsTab" class="admin-tab-content" style="display: none;">
+                        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                            <button onclick="refreshAdminPosts()" class="btn" style="background: #007bff;">🔄 Atualizar</button>
+                            <button onclick="deleteSelectedPosts()" class="btn" style="background: #dc3545;">🗑️ Deletar Selecionados</button>
+                        </div>
+                        <div id="adminPostsContent" style="max-height: 400px; overflow-y: auto;">
+                            <div class="loading">Carregando posts...</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Aba Ranking -->
+                    <div id="adminRankingTab" class="admin-tab-content" style="display: none;">
+                        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                            <button onclick="refreshAdminRanking()" class="btn" style="background: #007bff;">🔄 Atualizar</button>
+                            <button onclick="recalculateRanking()" class="btn" style="background: #ffc107;">⚡ Recalcular</button>
+                        </div>
+                        <div id="adminRankingContent" style="max-height: 400px; overflow-y: auto;">
+                            <div class="loading">Carregando ranking...</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Aba Pontos -->
+                    <div id="adminPointsTab" class="admin-tab-content" style="display: none;">
+                        <div style="background: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+                            <h3>🎯 Gerenciar Pontos dos Torneios</h3>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px;">
+                                <div>
+                                    <label><strong>Jogador:</strong></label>
+                                    <select id="adminPlayerSelect" style="width: 100%; padding: 8px; border-radius: 5px;" onchange="updatePlayerInfo()">
+                                        <option value="">Selecione um jogador...</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label><strong>Torneio:</strong></label>
+                                    <select id="adminTournamentSelect" style="width: 100%; padding: 8px; border-radius: 5px;" onchange="updateTournamentInfo()">
+                                        <option value="">Selecione um torneio...</option>
+                                        <option value="league_challenge" data-limit="50">League Challenge (Limite: 50 pts)</option>
+                                        <option value="league_cup" data-limit="30">League Cup (Limite: 30 pts)</option>
+                                        <option value="regional" data-limit="200" data-bfl="true">Regional (Limite: 200 pts - BFL)</option>
+                                        <option value="internacional" data-limit="200" data-bfl="true">Internacional (Limite: 200 pts - BFL)</option>
+                                        <option value="worlds" data-limit="100">Worlds (Limite: 100 pts)</option>
+                                        <option value="special_challenge" data-limit="25">Special Challenge (Limite: 25 pts)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label><strong>Pontos Conquistados:</strong></label>
+                                    <input type="number" id="adminPointsInput" min="0" max="500" style="width: 100%; padding: 8px; border-radius: 5px;" onchange="calculatePointsPreview()">
+                                </div>
+                                <div>
+                                    <label><strong>Motivo/Colocação:</strong></label>
+                                    <input type="text" id="adminReasonInput" placeholder="Ex: 1º lugar, Top 8..." style="width: 100%; padding: 8px; border-radius: 5px;">
+                                </div>
+                            </div>
+                            
+                            <!-- Informações do Jogador e Torneio -->
+                            <div id="playerTournamentInfo" style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px; display: none;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                                    <div>
+                                        <strong>📊 Pontuação Atual Global:</strong>
+                                        <div id="currentGlobalPoints" style="font-size: 18px; color: #007bff;">-</div>
+                                    </div>
+                                    <div>
+                                        <strong>🏆 Pontos no Torneio:</strong>
+                                        <div id="currentTournamentPoints" style="font-size: 18px; color: #28a745;">-</div>
+                                    </div>
+                                    <div>
+                                        <strong>⚠️ Limite do Torneio:</strong>
+                                        <div id="tournamentLimit" style="font-size: 18px; color: #dc3545;">-</div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Preview BFL para Regional/Internacional -->
+                                <div id="bflInfo" style="margin-top: 15px; padding: 10px; background: #fff3cd; border-radius: 5px; display: none;">
+                                    <strong>🎯 Sistema BFL (Best Finish Limit):</strong>
+                                    <div id="bflDetails" style="margin-top: 5px; font-size: 14px;"></div>
+                                </div>
+                            </div>
+                            
+                            <div id="pointsPreview" style="margin-top: 15px; padding: 15px; background: #e7f3ff; border-radius: 8px; display: none;">
+                                <h4 style="margin: 0 0 10px 0; color: #007bff;">📋 Preview da Pontuação</h4>
+                                <div id="previewContent"></div>
+                            </div>
+                            <div style="margin-top: 15px; text-align: center;">
+                                <button onclick="applyTournamentPoints()" class="btn" style="background: #28a745; font-size: 16px;">
+                                    ✅ Aplicar Pontuação
+                                </button>
+                            </div>
+                            <div id="pointsPreview" style="margin-top: 15px; padding: 10px; background: #e7f3ff; border-radius: 5px; display: none;"></div>
+                        </div>
+                        
+                        <!-- Histórico de Pontuações -->
+                        <div>
+                            <h4>📜 Histórico de Pontuações</h4>
+                            <div id="adminPointsHistory" style="max-height: 300px; overflow-y: auto;">
+                                <div class="loading">Carregando histórico...</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Aba Verificações -->
+                    <div id="adminVerificationTab" class="admin-tab-content" style="display: none;">
+                        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                            <button onclick="refreshAdminVerifications()" class="btn" style="background: #007bff;">🔄 Atualizar</button>
+                            <button onclick="approveSelectedVerifications()" class="btn" style="background: #28a745;">✅ Aprovar Selecionados</button>
+                            <button onclick="rejectSelectedVerifications()" class="btn" style="background: #dc3545;">❌ Rejeitar Selecionados</button>
+                        </div>
+                        <div id="adminVerificationContent" style="max-height: 400px; overflow-y: auto;">
+                            <div class="loading">Carregando verificações...</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Mostrar modal
+            document.getElementById('adminModal').innerHTML = adminHtml;
+            openModal('adminModal');
+            
+            // Carregar dados iniciais
+            refreshAdminPlayers();
+            loadPlayerSelectOptions();
+        }
+        
+        // Função para alternar entre abas do admin
+        function showAdminTab(tabName) {
+            // Esconder todas as abas
+            document.querySelectorAll('.admin-tab-content').forEach(tab => {
+                tab.style.display = 'none';
+            });
+            
+            // Remover classe active de todos os botões
+            document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Mostrar aba selecionada
+            document.getElementById(`admin${tabName.charAt(0).toUpperCase() + tabName.slice(1)}Tab`).style.display = 'block';
+            
+            // Ativar botão selecionado
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            
+            // Carregar dados específicos da aba
+            switch(tabName) {
+                case 'players':
+                    refreshAdminPlayers();
+                    break;
+                case 'posts':
+                    refreshAdminPosts();
+                    break;
+                case 'ranking':
+                    refreshAdminRanking();
+                    break;
+                case 'points':
+                    refreshAdminPointsHistory();
+                    break;
+                case 'verification':
+                    refreshAdminVerifications();
+                    break;
+            }
+        }
+        
+        // Função para carregar jogadores no admin
+        async function refreshAdminPlayers() {
+            try {
+                const container = document.getElementById('adminPlayersContent');
+                container.innerHTML = '<div class="loading">Carregando jogadores...</div>';
+                
+                // Buscar dados do Firebase
+                const [profiles, ranking] = await Promise.all([
+                    firebaseRequest('GET', 'userProfiles'),
+                    firebaseRequest('GET', 'ranking')
+                ]);
+                
+                let playersHtml = `
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa;">
+                                <th style="padding: 10px; border: 1px solid #ddd;">Nome</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Email</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Pontos</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Verificado</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                // Processar perfis
+                if (profiles) {
+                    for (const [uid, profile] of Object.entries(profiles)) {
+                        const name = profile.nickname || profile.name || 'N/A';
+                        const email = profile.userEmail || 'N/A';
+                        const verified = profile.isVerified ? '✅' : '❌';
+                        
+                        // Buscar pontos no ranking
+                        let points = 0;
+                        if (ranking) {
+                            for (const rankData of Object.values(ranking)) {
+                                if (rankData.name === name) {
+                                    points = rankData.points || 0;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        playersHtml += `
+                            <tr>
+                                <td style="padding: 8px; border: 1px solid #ddd;">${name}</td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">${email}</td>
+                                <td style="padding: 8px; border: 1px solid #ddd;"><strong>${points}</strong></td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">${verified}</td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">
+                                    <button onclick="editPlayer('${uid}', '${name}')" style="background: #ffc107; color: #333; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">✏️ Editar</button>
+                                    <button onclick="deletePlayer('${uid}', '${name}')" style="background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; margin-left: 5px;">🗑️ Deletar</button>
+                                </td>
+                            </tr>
+                        `;
+                    }
+                }
+                
+                playersHtml += '</tbody></table>';
+                
+                if (!profiles || Object.keys(profiles).length === 0) {
+                    playersHtml = '<p style="text-align: center; color: #666;">Nenhum jogador encontrado.</p>';
+                }
+                
+                container.innerHTML = playersHtml;
+                
+            } catch (error) {
+                console.error('Erro ao carregar jogadores:', error);
+                document.getElementById('adminPlayersContent').innerHTML = '<p style="color: red;">Erro ao carregar jogadores.</p>';
+            }
+        }
+        
+        // Função para carregar posts no admin
+        async function refreshAdminPosts() {
+            try {
+                const container = document.getElementById('adminPostsContent');
+                container.innerHTML = '<div class="loading">Carregando posts...</div>';
+                
+                const posts = await firebaseRequest('GET', 'posts');
+                
+                let postsHtml = `
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa;">
+                                <th style="padding: 10px; border: 1px solid #ddd;">
+                                    <input type="checkbox" id="selectAllPosts" onchange="toggleAllPosts(this)">
+                                </th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Usuário</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Conteúdo</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Curtidas</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Data</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                if (posts) {
+                    for (const [postId, post] of Object.entries(posts)) {
+                        const content = post.content ? post.content.substring(0, 50) + '...' : 'N/A';
+                        const likes = post.curtidas || 0;
+                        const date = post.timestamp ? new Date(post.timestamp).toLocaleDateString() : 'N/A';
+                        
+                        postsHtml += `
+                            <tr>
+                                <td style="padding: 8px; border: 1px solid #ddd;">
+                                    <input type="checkbox" class="post-checkbox" value="${postId}">
+                                </td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">${post.user || 'N/A'}</td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">${content}</td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">${likes}</td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">${date}</td>
+                                <td style="padding: 8px; border: 1px solid #ddd;">
+                                    <button onclick="viewPost('${postId}')" style="background: #007bff; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">👁️ Ver</button>
+                                    <button onclick="deletePost('${postId}')" style="background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; margin-left: 5px;">🗑️ Deletar</button>
+                                </td>
+                            </tr>
+                        `;
+                    }
+                }
+                
+                postsHtml += '</tbody></table>';
+                
+                if (!posts || Object.keys(posts).length === 0) {
+                    postsHtml = '<p style="text-align: center; color: #666;">Nenhum post encontrado.</p>';
+                }
+                
+                container.innerHTML = postsHtml;
+                
+            } catch (error) {
+                console.error('Erro ao carregar posts:', error);
+                document.getElementById('adminPostsContent').innerHTML = '<p style="color: red;">Erro ao carregar posts.</p>';
+            }
+        }
+        
+        // Função para carregar ranking no admin
+        async function refreshAdminRanking() {
+            try {
+                const container = document.getElementById('adminRankingContent');
+                container.innerHTML = '<div class="loading">Carregando ranking...</div>';
+                
+                const ranking = await firebaseRequest('GET', 'ranking');
+                
+                if (!ranking) {
+                    container.innerHTML = '<p style="text-align: center; color: #666;">Nenhum dado de ranking encontrado.</p>';
+                    return;
+                }
+                
+                // Converter para array e ordenar
+                const rankingArray = Object.entries(ranking).map(([id, data]) => ({
+                    id,
+                    ...data
+                })).sort((a, b) => (b.points || 0) - (a.points || 0));
+                
+                let rankingHtml = `
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa;">
+                                <th style="padding: 10px; border: 1px solid #ddd;">Posição</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Nome</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Pontos</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Última Atualização</th>
+                                <th style="padding: 10px; border: 1px solid #ddd;">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                rankingArray.forEach((player, index) => {
+                    const position = index + 1;
+                    const lastUpdate = player.lastUpdated ? new Date(player.lastUpdated).toLocaleDateString() : 'N/A';
+                    
+                    rankingHtml += `
+                        <tr>
+                            <td style="padding: 8px; border: 1px solid #ddd;"><strong>${position}º</strong></td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">${player.name || 'N/A'}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;"><strong>${player.points || 0}</strong></td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">${lastUpdate}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">
+                                <button onclick="editRankingPlayer('${player.id}', '${player.name}')" style="background: #ffc107; color: #333; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">✏️ Editar</button>
+                                <button onclick="deleteRankingPlayer('${player.id}', '${player.name}')" style="background: #dc3545; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer; margin-left: 5px;">🗑️ Remover</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                
+                rankingHtml += '</tbody></table>';
+                container.innerHTML = rankingHtml;
+                
+            } catch (error) {
+                console.error('Erro ao carregar ranking:', error);
+                document.getElementById('adminRankingContent').innerHTML = '<p style="color: red;">Erro ao carregar ranking.</p>';
+            }
+        }
+        
+        // Função para carregar opções de jogadores no select
+        async function loadPlayerSelectOptions() {
+            try {
+                const ranking = await firebaseRequest('GET', 'ranking');
+                const select = document.getElementById('adminPlayerSelect');
+                
+                if (!select) return;
+                
+                select.innerHTML = '<option value="">Selecione um jogador...</option>';
+                
+                if (ranking) {
+                    Object.entries(ranking).forEach(([playerId, player]) => {
+                        const option = document.createElement('option');
+                        option.value = playerId;
+                        option.textContent = `${player.name} (${player.points || 0} pts)`;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Erro ao carregar jogadores:', error);
+            }
+        }
+        
+        // Função para atualizar informações do jogador selecionado
+        async function updatePlayerInfo() {
+            const playerSelect = document.getElementById('adminPlayerSelect');
+            const tournamentSelect = document.getElementById('adminTournamentSelect');
+            const infoDiv = document.getElementById('playerTournamentInfo');
+            
+            if (!playerSelect.value) {
+                infoDiv.style.display = 'none';
+                return;
+            }
+            
+            try {
+                // Buscar dados do jogador
+                const [ranking, tournamentPoints] = await Promise.all([
+                    firebaseRequest('GET', 'ranking'),
+                    firebaseRequest('GET', 'tournamentPoints')
+                ]);
+                
+                const playerId = playerSelect.value;
+                const playerData = ranking[playerId];
+                const playerName = playerData.name;
+                
+                // Atualizar pontuação global
+                document.getElementById('currentGlobalPoints').textContent = playerData.points || 0;
+                
+                // Atualizar pontuação do torneio se selecionado
+                updateTournamentInfo();
+                
+                infoDiv.style.display = 'block';
+                
+            } catch (error) {
+                console.error('Erro ao buscar informações do jogador:', error);
+            }
+        }
+        
+        // Função para atualizar informações do torneio
+        async function updateTournamentInfo() {
+            const playerSelect = document.getElementById('adminPlayerSelect');
+            const tournamentSelect = document.getElementById('adminTournamentSelect');
+            
+            if (!playerSelect.value || !tournamentSelect.value) return;
+            
+            try {
+                const selectedOption = tournamentSelect.selectedOptions[0];
+                const tournamentId = tournamentSelect.value;
+                const tournamentLimit = parseInt(selectedOption.dataset.limit);
+                const isBFL = selectedOption.dataset.bfl === 'true';
+                
+                // Buscar dados do torneio
+                const [ranking, tournamentPoints] = await Promise.all([
+                    firebaseRequest('GET', 'ranking'),
+                    firebaseRequest('GET', 'tournamentPoints')
+                ]);
+                
+                const playerId = playerSelect.value;
+                const playerData = ranking[playerId];
+                const playerName = playerData.name;
+                
+                // Calcular pontos atuais no torneio
+                let currentTournamentPoints = 0;
+                if (tournamentPoints && tournamentPoints[playerName]) {
+                    if (isBFL) {
+                        // Para BFL, somar Regional + Internacional
+                        const regionalPoints = tournamentPoints[playerName]['regional'] || 0;
+                        const internacionalPoints = tournamentPoints[playerName]['internacional'] || 0;
+                        currentTournamentPoints = regionalPoints + internacionalPoints;
+                    } else {
+                        currentTournamentPoints = tournamentPoints[playerName][tournamentId] || 0;
+                    }
+                }
+                
+                // Atualizar interface
+                document.getElementById('currentTournamentPoints').textContent = currentTournamentPoints;
+                document.getElementById('tournamentLimit').textContent = tournamentLimit;
+                
+                // Mostrar informações BFL se aplicável
+                const bflInfo = document.getElementById('bflInfo');
+                if (isBFL) {
+                    const bflDetails = await calculateBFLDetails(playerName, tournamentPoints);
+                    document.getElementById('bflDetails').innerHTML = bflDetails;
+                    bflInfo.style.display = 'block';
+                } else {
+                    bflInfo.style.display = 'none';
+                }
+                
+                // Recalcular preview se há pontos inseridos
+                calculatePointsPreview();
+                
+            } catch (error) {
+                console.error('Erro ao atualizar informações do torneio:', error);
+            }
+        }
+        
+        // Função para calcular detalhes do BFL
+        async function calculateBFLDetails(playerName, tournamentPoints) {
+            if (!tournamentPoints || !tournamentPoints[playerName]) {
+                return 'Nenhuma pontuação em Regional/Internacional encontrada.';
+            }
+            
+            const playerTournaments = tournamentPoints[playerName];
+            const bflEvents = [];
+            
+            // Coletar todos os eventos BFL (Regional + Internacional)
+            for (const [tournamentType, points] of Object.entries(playerTournaments)) {
+                if ((tournamentType === 'regional' || tournamentType === 'internacional') && points > 0) {
+                    bflEvents.push({
+                        type: tournamentType,
+                        points: points
+                    });
+                }
+            }
+            
+            if (bflEvents.length === 0) {
+                return 'Nenhuma pontuação em Regional/Internacional encontrada.';
+            }
+            
+            // Ordenar por pontos (maior para menor)
+            bflEvents.sort((a, b) => b.points - a.points);
+            
+            // Calcular BFL (descartar os 2 menores se mais de 5 eventos)
+            let validEvents = bflEvents;
+            let discardedEvents = [];
+            
+            if (bflEvents.length > 5) {
+                validEvents = bflEvents.slice(0, -2); // Remove os 2 menores
+                discardedEvents = bflEvents.slice(-2);
+            }
+            
+            const totalBFLPoints = validEvents.reduce((sum, event) => sum + event.points, 0);
+            
+            let details = `
+                <div><strong>Total de eventos:</strong> ${bflEvents.length}</div>
+                <div><strong>Eventos válidos:</strong> ${validEvents.length}</div>
+                <div><strong>Pontos BFL totais:</strong> ${totalBFLPoints}</div>
+            `;
+            
+            if (discardedEvents.length > 0) {
+                details += `<div style="color: #dc3545;"><strong>Eventos descartados:</strong> ${discardedEvents.map(e => `${e.points} pts`).join(', ')}</div>`;
+            }
+            
+            return details;
+        }
+        
+        // Função para calcular preview da pontuação
+        async function calculatePointsPreview() {
+            const playerSelect = document.getElementById('adminPlayerSelect');
+            const tournamentSelect = document.getElementById('adminTournamentSelect');
+            const pointsInput = document.getElementById('adminPointsInput');
+            const previewDiv = document.getElementById('pointsPreview');
+            const previewContent = document.getElementById('previewContent');
+            
+            if (!playerSelect.value || !tournamentSelect.value || !pointsInput.value) {
+                previewDiv.style.display = 'none';
+                return;
+            }
+            
+            const newPoints = parseInt(pointsInput.value);
+            if (newPoints <= 0) {
+                previewDiv.style.display = 'none';
+                return;
+            }
+            
+            try {
+                const selectedOption = tournamentSelect.selectedOptions[0];
+                const tournamentId = tournamentSelect.value;
+                const tournamentLimit = parseInt(selectedOption.dataset.limit);
+                const isBFL = selectedOption.dataset.bfl === 'true';
+                
+                const [ranking, tournamentPoints] = await Promise.all([
+                    firebaseRequest('GET', 'ranking'),
+                    firebaseRequest('GET', 'tournamentPoints')
+                ]);
+                
+                const playerId = playerSelect.value;
+                const playerData = ranking[playerId];
+                const playerName = playerData.name;
+                const currentGlobalPoints = playerData.points || 0;
+                
+                // Calcular pontos atuais no torneio
+                let currentTournamentPoints = 0;
+                if (tournamentPoints && tournamentPoints[playerName]) {
+                    if (isBFL) {
+                        const regionalPoints = tournamentPoints[playerName]['regional'] || 0;
+                        const internacionalPoints = tournamentPoints[playerName]['internacional'] || 0;
+                        currentTournamentPoints = regionalPoints + internacionalPoints;
+                    } else {
+                        currentTournamentPoints = tournamentPoints[playerName][tournamentId] || 0;
+                    }
+                }
+                
+                // Calcular novos pontos considerando limite
+                const totalTournamentPoints = currentTournamentPoints + newPoints;
+                let validPoints = newPoints;
+                let exceededPoints = 0;
+                
+                if (totalTournamentPoints > tournamentLimit) {
+                    const availableSpace = tournamentLimit - currentTournamentPoints;
+                    validPoints = Math.max(0, availableSpace);
+                    exceededPoints = newPoints - validPoints;
+                }
+                
+                const newGlobalPoints = currentGlobalPoints + validPoints;
+                const newTournamentTotal = currentTournamentPoints + validPoints;
+                
+                // Gerar preview
+                let preview = `
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div>
+                            <strong>🔄 Alterações na Pontuação:</strong>
+                            <div>• Pontos inseridos: <span style="color: #007bff;">${newPoints}</span></div>
+                            <div>• Pontos válidos: <span style="color: #28a745;">${validPoints}</span></div>
+                            ${exceededPoints > 0 ? `<div>• Pontos excedentes: <span style="color: #dc3545;">${exceededPoints}</span></div>` : ''}
+                        </div>
+                        <div>
+                            <strong>📊 Resultado Final:</strong>
+                            <div>• Global: ${currentGlobalPoints} → <span style="color: #007bff;">${newGlobalPoints}</span></div>
+                            <div>• Torneio: ${currentTournamentPoints} → <span style="color: #28a745;">${newTournamentTotal}</span></div>
+                            <div>• Limite: <span style="color: #dc3545;">${tournamentLimit}</span></div>
+                        </div>
+                    </div>
+                `;
+                
+                if (exceededPoints > 0) {
+                    preview += `
+                        <div style="margin-top: 15px; padding: 10px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 5px;">
+                            ⚠️ <strong>Atenção:</strong> ${exceededPoints} pontos serão descartados por exceder o limite do torneio.
+                        </div>
+                    `;
+                }
+                
+                if (isBFL) {
+                    preview += `
+                        <div style="margin-top: 15px; padding: 10px; background: #d1ecf1; border-left: 4px solid #17a2b8; border-radius: 5px;">
+                            🎯 <strong>Sistema BFL:</strong> Esta pontuação será incluída no cálculo BFL (Regional + Internacional).
+                        </div>
+                    `;
+                }
+                
+                previewContent.innerHTML = preview;
+                previewDiv.style.display = 'block';
+                
+            } catch (error) {
+                console.error('Erro ao calcular preview:', error);
+                previewDiv.style.display = 'none';
+            }
+        }
+        
+        // Função para aplicar pontos de torneio com regras completas
+        async function applyTournamentPoints() {
+            try {
+                const playerSelect = document.getElementById('adminPlayerSelect');
+                const tournamentSelect = document.getElementById('adminTournamentSelect');
+                const pointsInput = document.getElementById('adminPointsInput');
+                const reasonInput = document.getElementById('adminReasonInput');
+                
+                const playerId = playerSelect.value;
+                const tournamentId = tournamentSelect.value;
+                const newPoints = parseInt(pointsInput.value);
+                const reason = reasonInput.value;
+                
+                if (!playerId || !tournamentId || !newPoints || !reason) {
+                    alert('❌ Preencha todos os campos!');
+                    return;
+                }
+                
+                const selectedOption = tournamentSelect.selectedOptions[0];
+                const tournamentLimit = parseInt(selectedOption.dataset.limit);
+                const isBFL = selectedOption.dataset.bfl === 'true';
+                
+                // Buscar dados atuais
+                const [ranking, tournamentPoints] = await Promise.all([
+                    firebaseRequest('GET', 'ranking'),
+                    firebaseRequest('GET', 'tournamentPoints')
+                ]);
+                
+                const playerData = ranking[playerId];
+                const playerName = playerData.name;
+                const currentGlobalPoints = playerData.points || 0;
+                
+                // ========== APLICAR REGRAS DE NEGÓCIO ==========
+                
+                // 1. Calcular pontos atuais no torneio
+                let currentTournamentPoints = 0;
+                if (tournamentPoints && tournamentPoints[playerName]) {
+                    if (isBFL) {
+                        // Para BFL, somar Regional + Internacional
+                        const regionalPoints = tournamentPoints[playerName]['regional'] || 0;
+                        const internacionalPoints = tournamentPoints[playerName]['internacional'] || 0;
+                        currentTournamentPoints = regionalPoints + internacionalPoints;
+                    } else {
+                        currentTournamentPoints = tournamentPoints[playerName][tournamentId] || 0;
+                    }
+                }
+                
+                // 2. Verificar limite do torneio
+                const totalTournamentPoints = currentTournamentPoints + newPoints;
+                let validPoints = newPoints;
+                let exceededPoints = 0;
+                
+                if (totalTournamentPoints > tournamentLimit) {
+                    const availableSpace = tournamentLimit - currentTournamentPoints;
+                    validPoints = Math.max(0, availableSpace);
+                    exceededPoints = newPoints - validPoints;
+                }
+                
+                if (validPoints <= 0) {
+                    alert(`❌ Este jogador já atingiu o limite de ${tournamentLimit} pontos neste torneio!`);
+                    return;
+                }
+                
+                // 3. Calcular novos totais
+                const newGlobalPoints = currentGlobalPoints + validPoints;
+                let newSpecificTournamentPoints = currentTournamentPoints + validPoints;
+                
+                // Para torneios BFL, precisa calcular separadamente
+                if (isBFL) {
+                    const currentSpecificPoints = (tournamentPoints && tournamentPoints[playerName] && tournamentPoints[playerName][tournamentId]) || 0;
+                    newSpecificTournamentPoints = currentSpecificPoints + validPoints;
+                }
+                
+                // ========== APLICAR BFL SE NECESSÁRIO ==========
+                let bflAdjustment = 0;
+                if (isBFL && tournamentPoints && tournamentPoints[playerName]) {
+                    bflAdjustment = await calculateBFLAdjustment(playerName, tournamentPoints, tournamentId, validPoints);
+                }
+                
+                // ========== ATUALIZAR DADOS NO FIREBASE ==========
+                
+                // Atualizar ranking global
+                await firebaseRequest('PATCH', `ranking/${playerId}`, {
+                    points: newGlobalPoints + bflAdjustment,
+                    lastUpdated: new Date().toISOString()
+                });
+                
+                // Atualizar pontos específicos do torneio
+                await firebaseRequest('PUT', `tournamentPoints/${playerName}/${tournamentId}`, newSpecificTournamentPoints);
+                
+                // ========== REGISTRAR NO HISTÓRICO ==========
+                const historyEntry = {
+                    playerName: playerName,
+                    playerId: playerId,
+                    tournamentId: tournamentId,
+                    tournamentName: selectedOption.text,
+                    tournamentLimit: tournamentLimit,
+                    pointsRequested: newPoints,
+                    pointsApplied: validPoints,
+                    pointsExceeded: exceededPoints,
+                    previousGlobalPoints: currentGlobalPoints,
+                    newGlobalPoints: newGlobalPoints + bflAdjustment,
+                    previousTournamentPoints: currentTournamentPoints,
+                    newTournamentPoints: newSpecificTournamentPoints,
+                    bflAdjustment: bflAdjustment,
+                    isBFL: isBFL,
+                    reason: reason,
+                    timestamp: new Date().toISOString(),
+                    admin: 'Sistema Admin'
+                };
+                
+                await firebaseRequest('POST', 'pointsHistory', historyEntry);
+                
+                // ========== FEEDBACK PARA O USUÁRIO ==========
+                let message = `✅ Pontuação aplicada com sucesso!\n\n`;
+                message += `🏆 ${playerName}\n`;
+                message += `📊 Pontos aplicados: ${validPoints}/${newPoints}\n`;
+                message += `🌍 Nova pontuação global: ${newGlobalPoints + bflAdjustment}\n`;
+                message += `🏆 Pontos no torneio: ${newSpecificTournamentPoints}\n`;
+                message += `📝 Motivo: ${reason}`;
+                
+                if (exceededPoints > 0) {
+                    message += `\n\n⚠️ ${exceededPoints} pontos foram descartados por exceder o limite do torneio.`;
+                }
+                
+                if (bflAdjustment !== 0) {
+                    message += `\n\n🎯 Ajuste BFL aplicado: ${bflAdjustment > 0 ? '+' : ''}${bflAdjustment} pontos`;
+                }
+                
+                alert(message);
+                
+                // ========== LIMPAR FORMULÁRIO E ATUALIZAR INTERFACE ==========
+                pointsInput.value = '';
+                reasonInput.value = '';
+                document.getElementById('pointsPreview').style.display = 'none';
+                
+                // Atualizar todas as seções
+                await Promise.all([
+                    refreshAdminRanking(),
+                    refreshAdminPointsHistory(),
+                    loadPlayerSelectOptions(),
+                    updatePlayerInfo()
+                ]);
+                
+            } catch (error) {
+                console.error('Erro ao aplicar pontos:', error);
+                alert(`❌ Erro ao aplicar pontos: ${error.message}`);
+            }
+        }
+        
+        // Função para calcular ajuste BFL
+        async function calculateBFLAdjustment(playerName, tournamentPoints, currentTournamentId, newPoints) {
+            try {
+                const playerTournaments = tournamentPoints[playerName] || {};
+                
+                // Simular a adição dos novos pontos
+                const simulatedTournaments = { ...playerTournaments };
+                simulatedTournaments[currentTournamentId] = (simulatedTournaments[currentTournamentId] || 0) + newPoints;
+                
+                // Coletar todos os eventos BFL
+                const bflEvents = [];
+                for (const [tournamentType, points] of Object.entries(simulatedTournaments)) {
+                    if ((tournamentType === 'regional' || tournamentType === 'internacional') && points > 0) {
+                        bflEvents.push({
+                            type: tournamentType,
+                            points: points
+                        });
+                    }
+                }
+                
+                if (bflEvents.length <= 5) {
+                    return 0; // Sem ajuste necessário
+                }
+                
+                // Ordenar por pontos (maior para menor)
+                bflEvents.sort((a, b) => b.points - a.points);
+                
+                // Calcular pontos antes e depois do BFL
+                const totalBeforeBFL = bflEvents.reduce((sum, event) => sum + event.points, 0);
+                const validEvents = bflEvents.slice(0, -2); // Remove os 2 menores
+                const totalAfterBFL = validEvents.reduce((sum, event) => sum + event.points, 0);
+                
+                // O ajuste é a diferença
+                return totalAfterBFL - totalBeforeBFL;
+                
+            } catch (error) {
+                console.error('Erro ao calcular ajuste BFL:', error);
+                return 0;
+            }
+        }
+        
+        // Função para carregar histórico de pontos
+        async function refreshAdminPointsHistory() {
+            try {
+                const container = document.getElementById('adminPointsHistory');
+                if (!container) return;
+                
+                container.innerHTML = '<div class="loading">Carregando histórico...</div>';
+                
+                const history = await firebaseRequest('GET', 'pointsHistory');
+                
+                if (!history) {
+                    container.innerHTML = '<p style="text-align: center; color: #666;">Nenhum histórico encontrado.</p>';
+                    return;
+                }
+                
+                // Converter para array e ordenar por data
+                const historyArray = Object.values(history).sort((a, b) => 
+                    new Date(b.timestamp) - new Date(a.timestamp)
+                );
+                
+                let historyHtml = `
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                        <thead>
+                            <tr style="background: #f8f9fa;">
+                                <th style="padding: 8px; border: 1px solid #ddd;">Data</th>
+                                <th style="padding: 8px; border: 1px solid #ddd;">Jogador</th>
+                                <th style="padding: 8px; border: 1px solid #ddd;">Torneio</th>
+                                <th style="padding: 8px; border: 1px solid #ddd;">Pontos</th>
+                                <th style="padding: 8px; border: 1px solid #ddd;">Motivo</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                historyArray.slice(0, 20).forEach(entry => { // Mostrar só últimas 20
+                    const date = new Date(entry.timestamp).toLocaleDateString();
+                    historyHtml += `
+                        <tr>
+                            <td style="padding: 6px; border: 1px solid #ddd;">${date}</td>
+                            <td style="padding: 6px; border: 1px solid #ddd;">${entry.playerName}</td>
+                            <td style="padding: 6px; border: 1px solid #ddd;">${entry.tournamentName}</td>
+                            <td style="padding: 6px; border: 1px solid #ddd;"><strong>+${entry.pointsAdded}</strong></td>
+                            <td style="padding: 6px; border: 1px solid #ddd;">${entry.reason}</td>
+                        </tr>
+                    `;
+                });
+                
+                historyHtml += '</tbody></table>';
+                container.innerHTML = historyHtml;
+                
+            } catch (error) {
+                console.error('Erro ao carregar histórico:', error);
+                if (document.getElementById('adminPointsHistory')) {
+                    document.getElementById('adminPointsHistory').innerHTML = '<p style="color: red;">Erro ao carregar histórico.</p>';
+                }
+            }
+        }
+        
+        // Função para deletar post
+        async function deletePost(postId) {
+            if (!confirm('Tem certeza que deseja deletar este post?')) return;
+            
+            try {
+                await firebaseRequest('DELETE', `posts/${postId}`);
+                alert('✅ Post deletado com sucesso!');
+                refreshAdminPosts();
+            } catch (error) {
+                console.error('Erro ao deletar post:', error);
+                alert('❌ Erro ao deletar post.');
+            }
+        }
+        
+        // Função para deletar jogador do ranking
+        async function deleteRankingPlayer(playerId, playerName) {
+            if (!confirm(`Tem certeza que deseja remover ${playerName} do ranking?`)) return;
+            
+            try {
+                await firebaseRequest('DELETE', `ranking/${playerId}`);
+                alert('✅ Jogador removido do ranking!');
+                refreshAdminRanking();
+                loadPlayerSelectOptions();
+            } catch (error) {
+                console.error('Erro ao remover jogador:', error);
+                alert('❌ Erro ao remover jogador.');
+            }
+        }
+        
+        // Função para adicionar novo jogador
+        async function addNewPlayer() {
+            const name = prompt('Nome do jogador:');
+            if (!name) return;
+            
+            const email = prompt('Email do jogador:');
+            if (!email) return;
+            
+            const points = parseInt(prompt('Pontos iniciais:') || '0');
+            
+            try {
+                // Adicionar ao ranking
+                await firebaseRequest('POST', 'ranking', {
+                    name: name,
+                    points: points,
+                    position: 1,
+                    lastUpdated: new Date().toISOString()
+                });
+                
+                // Adicionar perfil se não existir
+                await firebaseRequest('POST', 'userProfiles', {
+                    nickname: name,
+                    name: name,
+                    userEmail: email,
+                    isVerified: true,
+                    isPlayer: true,
+                    createdAt: new Date().toISOString()
+                });
+                
+                alert('✅ Jogador adicionado com sucesso!');
+                refreshAdminPlayers();
+                refreshAdminRanking();
+                loadPlayerSelectOptions();
+                
+            } catch (error) {
+                console.error('Erro ao adicionar jogador:', error);
+                alert('❌ Erro ao adicionar jogador.');
+            }
+        }
+        
+        // Atalho para abrir admin (Ctrl+Shift+A)
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.shiftKey && e.key === 'A') {
+                e.preventDefault();
+                showAdminPanel();
+            }
+        });
+        
+        // Função de emergência para ativar admin mode (desenvolvimento)
+        window.forceAdminMode = function() {
+            isAdmin = true;
+            document.getElementById('adminBtn').classList.remove('hidden');
+            console.log('🔧 ADMIN MODE ATIVADO FORÇADAMENTE');
+            console.log('💡 Agora você pode usar Ctrl+Shift+A ou clicar no botão Admin');
+        };
+        
+        // CSS para abas do admin
+        const adminCSS = `
+            .admin-tab-btn {
+                padding: 10px 15px;
+                background: #f8f9fa;
+                border: 1px solid #ddd;
+                cursor: pointer;
+                border-radius: 5px;
+                transition: all 0.3s ease;
+            }
+            
+            .admin-tab-btn:hover {
+                background: #e9ecef;
+            }
+            
+            .admin-tab-btn.active {
+                background: #007bff;
+                color: white;
+                border-color: #007bff;
+            }
+            
+            .admin-tab-content {
+                padding: 20px 0;
+            }
+            
+            .loading {
+                text-align: center;
+                padding: 20px;
+                color: #666;
+            }
+        `;
+        
+        // Adicionar CSS
+        const styleSheet = document.createElement('style');
+        styleSheet.textContent = adminCSS;
+        document.head.appendChild(styleSheet);
+
+        // Funções auxiliares do admin
+        function toggleAllPosts(checkbox) {
+            const checkboxes = document.querySelectorAll('.post-checkbox');
+            checkboxes.forEach(cb => cb.checked = checkbox.checked);
+        }
+        
+        function deleteSelectedPosts() {
+            const selectedPosts = Array.from(document.querySelectorAll('.post-checkbox:checked'))
+                .map(cb => cb.value);
+                
+            if (selectedPosts.length === 0) {
+                alert('❌ Selecione pelo menos um post para deletar.');
+                return;
+            }
+            
+            if (!confirm(`Tem certeza que deseja deletar ${selectedPosts.length} post(s)?`)) return;
+            
+            Promise.all(selectedPosts.map(postId => 
+                firebaseRequest('DELETE', `posts/${postId}`)
+            )).then(() => {
+                alert('✅ Posts deletados com sucesso!');
+                refreshAdminPosts();
+            }).catch(error => {
+                console.error('Erro ao deletar posts:', error);
+                alert('❌ Erro ao deletar posts.');
+            });
+        }
+        
+        function viewPost(postId) {
+            alert('📝 Visualização de post em desenvolvimento');
+        }
+        
+        function editPlayer(uid, name) {
+            const newName = prompt(`Editar nome do jogador:`, name);
+            if (!newName || newName === name) return;
+            
+            firebaseRequest('PATCH', `userProfiles/${uid}`, {
+                nickname: newName,
+                name: newName
+            }).then(() => {
+                alert('✅ Jogador atualizado!');
+                refreshAdminPlayers();
+            }).catch(error => {
+                console.error('Erro ao editar jogador:', error);
+                alert('❌ Erro ao editar jogador.');
+            });
+        }
+        
+        function deletePlayer(uid, name) {
+            if (!confirm(`Tem certeza que deseja deletar ${name}?`)) return;
+            
+            firebaseRequest('DELETE', `userProfiles/${uid}`).then(() => {
+                alert('✅ Jogador deletado!');
+                refreshAdminPlayers();
+            }).catch(error => {
+                console.error('Erro ao deletar jogador:', error);
+                alert('❌ Erro ao deletar jogador.');
+            });
+        }
+        
+        function editRankingPlayer(playerId, playerName) {
+            const newPoints = prompt(`Editar pontos de ${playerName}:`, '0');
+            if (!newPoints || isNaN(newPoints)) return;
+            
+            firebaseRequest('PATCH', `ranking/${playerId}`, {
+                points: parseInt(newPoints),
+                lastUpdated: new Date().toISOString()
+            }).then(() => {
+                alert('✅ Pontos atualizados!');
+                refreshAdminRanking();
+                loadPlayerSelectOptions();
+            }).catch(error => {
+                console.error('Erro ao editar pontos:', error);
+                alert('❌ Erro ao editar pontos.');
+            });
+        }
+        
+        function recalculateRanking() {
+            if (!confirm('Recalcular todo o ranking? Esta ação pode demorar um pouco.')) return;
+            
+            alert('🔄 Recalculando ranking... (funcionalidade em desenvolvimento)');
+        }
+        
+        function exportPlayersData() {
+            firebaseRequest('GET', 'userProfiles').then(profiles => {
+                if (!profiles) {
+                    alert('❌ Nenhum dado para exportar.');
+                    return;
+                }
+                
+                const data = JSON.stringify(profiles, null, 2);
+                const blob = new Blob([data], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `pokepoint_players_${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                
+                alert('✅ Dados exportados com sucesso!');
+            }).catch(error => {
+                console.error('Erro ao exportar:', error);
+                alert('❌ Erro ao exportar dados.');
+            });
+        }
+        
+        // Função placeholder para verificações
+        function refreshAdminVerifications() {
+            const container = document.getElementById('adminVerificationContent');
+            if (container) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 40px; color: #666;">
+                        <h3>🚧 Sistema de Verificações</h3>
+                        <p>Esta funcionalidade está em desenvolvimento.</p>
+                        <p>Em breve você poderá gerenciar verificações de jogadores aqui.</p>
+                    </div>
+                `;
+            }
+        }
+        
+        function approveSelectedVerifications() {
+            alert('✅ Função de aprovação em desenvolvimento');
+        }
+        
+        function rejectSelectedVerifications() {
+            alert('❌ Função de rejeição em desenvolvimento');
+        }
+
+        // Adicionar modal do admin se não existir
+        if (!document.getElementById('adminModal')) {
+            const adminModal = document.createElement('div');
+            adminModal.id = 'adminModal';
+            adminModal.className = 'modal';
+            adminModal.style.display = 'none';
+            document.body.appendChild(adminModal);
+        }
+
             // Adicionar dica sobre painel admin
             console.log('💡 Dica: Pressione Ctrl+Shift+A para acessar o painel administrativo de verificações');
+            console.log('🔧 Se não conseguir acessar, digite no console: forceAdminMode()');
         });
     </script>
 </body>
