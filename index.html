@@ -538,11 +538,29 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            cursor: pointer;
             transition: all 0.3s ease;
             border: 3px solid transparent;
             position: relative;
             overflow: hidden;
+        }
+
+        .player-ranking-avatar {
+            flex-shrink: 0;
+            margin-right: 15px;
+        }
+
+        .player-ranking-avatar img {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: 2px solid #007bff;
+            transition: all 0.3s ease;
+        }
+
+        .player-ranking-avatar img:hover {
+            transform: scale(1.1);
+            border-color: #ffd93d;
+            box-shadow: 0 0 20px rgba(255, 217, 61, 0.5);
         }
 
         .player-card::before {
@@ -4102,8 +4120,8 @@
             
             <form id="profileForm">
                 <div class="form-group">
-                    <label for="profileNickname">Nome de Usuário:</label>
-                    <input type="text" id="profileNickname" placeholder="Seu nickname">
+                    <label for="profileNickname">Nome de Usuário: <span style="color: red;">*</span></label>
+                    <input type="text" id="profileNickname" placeholder="Seu nickname" required minlength="2" maxlength="30">
                 </div>
                 
                 <div class="form-group">
@@ -4387,50 +4405,104 @@
             
             try {
                 const currentUser = getCurrentUser();
-                const selectedAvatar = document.querySelector('.avatar-option.selected');
+                
+                // Obter avatar correto
+                let avatarValue = 'brendan'; // padrão
+                const selectedAvatarElement = document.querySelector('.avatar-option.selected');
+                if (selectedAvatarElement) {
+                    // Extrair nome do avatar da URL
+                    const avatarSrc = selectedAvatarElement.src;
+                    const avatarMatch = avatarSrc.match(/trainers\/([^.]+)\.png/);
+                    if (avatarMatch) {
+                        avatarValue = avatarMatch[1];
+                    }
+                } else {
+                    // Tentar pegar do data-attribute ou do preview atual
+                    const currentPreview = document.getElementById('currentAvatarPreview');
+                    if (currentPreview) {
+                        const dataAvatarId = currentPreview.getAttribute('data-avatar-id');
+                        if (dataAvatarId) {
+                            avatarValue = dataAvatarId;
+                        } else if (currentPreview.src) {
+                            const avatarMatch = currentPreview.src.match(/trainers\/([^.]+)\.png/);
+                            if (avatarMatch) {
+                                avatarValue = avatarMatch[1];
+                            }
+                        }
+                    }
+                }
                 
                 const profileData = {
+                    name: document.getElementById('profileNickname').value.trim(),
                     nickname: document.getElementById('profileNickname').value.trim(),
                     description: document.getElementById('profileDescription').value.trim(),
-                    avatar: selectedAvatar ? selectedAvatar.src : document.getElementById('currentAvatarPreview').src,
+                    avatar: avatarValue,
                     favoriteType: document.getElementById('profileFavoriteType').value,
                     city: document.getElementById('profileCity').value.trim(),
                     experience: document.getElementById('profileExperience').value,
                     lastUpdated: new Date().toISOString(),
-                    userEmail: currentUser ? currentUser.email : null
+                    userEmail: currentUser ? currentUser.email : null,
+                    totalPoints: 0, // Inicializar como usuário normal
+                    tournaments: {},
+                    teams: [],
+                    achievements: [],
+                    rating: 0,
+                    posts: []
                 };
                 
-                // Salvar perfil localmente
-                const userKey = currentUser ? currentUser.email.split('@')[0] : 'guest';
+                // Validação obrigatória do nome
+                if (!profileData.name || profileData.name.length < 2) {
+                    alert('❌ O nome de usuário é obrigatório e deve ter pelo menos 2 caracteres!');
+                    return;
+                }
+                
+                console.log('💾 Tentando salvar perfil:', profileData);
+                console.log('🔍 Dados do usuário atual:', currentUser);
+                
+                // Salvar perfil localmente com verificação segura
+                let userKey = 'guest';
+                if (currentUser) {
+                    if (currentUser.email && typeof currentUser.email === 'string') {
+                        userKey = currentUser.email.split('@')[0];
+                    } else if (currentUser.uid) {
+                        userKey = currentUser.uid;
+                    }
+                }
+                console.log('🔑 Chave do usuário determinada:', userKey);
+                
                 localStorage.setItem('userProfile_' + userKey, JSON.stringify(profileData));
+                console.log('💾 Perfil salvo localmente para:', userKey);
+                console.log('📄 Dados salvos:', profileData);
                 
                 // Salvar perfil no Firebase se usuário estiver logado
-                if (currentUser && currentUser.email) {
+                if (currentUser && currentUser.uid) {
                     try {
                         const userProfileRef = database.ref(`${COLLECTION_NAME}/userProfiles/${currentUser.uid}`);
                         await userProfileRef.set(profileData);
-                        console.log('✅ Perfil salvo no Firebase');
+                        console.log('☁️ Perfil salvo no Firebase para UID:', currentUser.uid);
                     } catch (firebaseError) {
                         console.warn('⚠️ Erro ao salvar no Firebase, mantendo apenas local:', firebaseError);
                     }
+                } else {
+                    console.log('ℹ️ Usuário não logado, salvando apenas localmente');
                 }
                 
                 // Atualizar avatar no createPost
                 const createPostAvatar = document.getElementById('createPostAvatar');
                 if (createPostAvatar) {
-                    createPostAvatar.src = profileData.avatar;
+                    createPostAvatar.src = `https://play.pokemonshowdown.com/sprites/trainers/${profileData.avatar}.png`;
                 }
                 
                 // Atualizar avatar nos posts existentes do usuário
-                updateUserAvatarInPosts(currentUser, profileData.avatar);
+                updateUserAvatarInPosts(currentUser, `https://play.pokemonshowdown.com/sprites/trainers/${profileData.avatar}.png`);
                 
                 // Atualizar nome nos posts se nickname mudou
                 if (currentUser && currentUser.email) {
-                    updateUserNameInPosts(currentUser.email, profileData.nickname);
+                    updateUserNameInPosts(currentUser.email, profileData.name);
                 }
                 
                 alert('✅ Perfil atualizado com sucesso!\n\n' +
-                      '👤 Nickname: ' + (profileData.nickname || 'Não definido') + '\n' +
+                      '👤 Nome: ' + (profileData.name || 'Não definido') + '\n' +
                       '📝 Descrição: ' + (profileData.description ? 'Atualizada' : 'Não definida') + '\n' +
                       '🎮 Avatar: Atualizado\n' +
                       '📍 Cidade: ' + (profileData.city || 'Não definida') + '\n' +
@@ -4496,7 +4568,19 @@
 
         async function loadUserProfile() {
             try {
-                const userKey = currentUser ? currentUser.email.split('@')[0] : 'guest';
+                console.log('🔍 Carregando perfil do usuário:', currentUser);
+                
+                // Determinar chave do usuário com verificação segura
+                let userKey = 'guest';
+                if (currentUser) {
+                    if (currentUser.email && typeof currentUser.email === 'string') {
+                        userKey = currentUser.email.split('@')[0];
+                    } else if (currentUser.uid) {
+                        userKey = currentUser.uid;
+                    }
+                }
+                console.log('🔑 Chave do usuário determinada:', userKey);
+                
                 let profile = null;
                 
                 // Tentar carregar do Firebase primeiro
@@ -4525,15 +4609,23 @@
                 }
                 
                 if (profile) {
-                    // Atualizar avatar no createPost
+                    // Atualizar avatar no createPost com URL completa
                     if (profile.avatar) {
                         const createPostAvatar = document.getElementById('createPostAvatar');
                         if (createPostAvatar) {
-                            createPostAvatar.src = profile.avatar;
+                            // Se o avatar for apenas o nome, construir URL completa
+                            if (!profile.avatar.startsWith('http')) {
+                                createPostAvatar.src = `https://play.pokemonshowdown.com/sprites/trainers/${profile.avatar}.png`;
+                            } else {
+                                createPostAvatar.src = profile.avatar;
+                            }
                         }
                     }
                     
-                    console.log('✅ Perfil do usuário carregado:', profile.nickname || userKey);
+                    // Atualizar informações globais do usuário
+                    currentUserProfile = profile;
+                    
+                    console.log('✅ Perfil do usuário carregado:', profile.name || profile.nickname || userKey);
                     return profile;
                 } else {
                     console.log('ℹ️ Nenhum perfil encontrado para o usuário');
@@ -4552,9 +4644,10 @@
             console.log('getCurrentUser chamada - currentUserProfile:', currentUserProfile);
             
             // Prioridade 1: Nickname do perfil se disponível
-            if (currentUser && currentUser.email) {
+            if (currentUser && currentUser.email && typeof currentUser.email === 'string') {
                 const userEmail = currentUser.email;
-                const savedProfile = localStorage.getItem('userProfile_' + userEmail.split('@')[0]);
+                const userKey = userEmail.split('@')[0];
+                const savedProfile = localStorage.getItem('userProfile_' + userKey);
                 if (savedProfile) {
                     try {
                         const profile = JSON.parse(savedProfile);
@@ -4568,7 +4661,7 @@
                 }
                 
                 // Fallback para email cortado se não tiver nickname
-                const userName = userEmail.split('@')[0];
+                const userName = userKey; // Já calculado acima
                 console.log('Retornando usuário do Firebase (sem nickname):', userName);
                 return userName;
             }
@@ -4583,9 +4676,10 @@
             const userInfo = document.getElementById('userInfo');
             if (userInfo && userInfo.style.display !== 'none') {
                 const userEmail = document.getElementById('userEmail');
-                if (userEmail && userEmail.textContent) {
+                if (userEmail && userEmail.textContent && typeof userEmail.textContent === 'string') {
                     const email = userEmail.textContent;
-                    const savedProfile = localStorage.getItem('userProfile_' + email.split('@')[0]);
+                    const emailKey = email.split('@')[0];
+                    const savedProfile = localStorage.getItem('userProfile_' + emailKey);
                     if (savedProfile) {
                         try {
                             const profile = JSON.parse(savedProfile);
@@ -4598,7 +4692,7 @@
                         }
                     }
                     
-                    const userName = email.split('@')[0];
+                    const userName = emailKey; // Já calculado acima
                     console.log('Retornando do userEmail:', userName);
                     return userName;
                 }
@@ -5011,11 +5105,12 @@
 
         function loadCurrentProfile() {
             const currentUser = getCurrentUser();
-            const savedProfile = localStorage.getItem('userProfile_' + currentUser);
             
-            if (savedProfile) {
-                const profile = JSON.parse(savedProfile);
-                document.getElementById('profileNickname').value = profile.nickname || '';
+            // Tentar carregar perfil do usuário atual
+            if (currentUserProfile) {
+                // Usar perfil global já carregado
+                const profile = currentUserProfile;
+                document.getElementById('profileNickname').value = profile.name || profile.nickname || '';
                 document.getElementById('profileDescription').value = profile.description || '';
                 document.getElementById('profileFavoriteType').value = profile.favoriteType || '';
                 document.getElementById('profileCity').value = profile.city || '';
@@ -5023,25 +5118,57 @@
                 
                 // Atualizar preview do avatar
                 if (profile.avatar) {
-                    document.getElementById('currentAvatarPreview').src = profile.avatar;
+                    const avatarUrl = profile.avatar.startsWith('http') 
+                        ? profile.avatar 
+                        : `https://play.pokemonshowdown.com/sprites/trainers/${profile.avatar}.png`;
+                    document.getElementById('currentAvatarPreview').src = avatarUrl;
+                }
+            } else if (currentUser) {
+                // Tentar carregar do localStorage como fallback
+                let userKey = 'guest';
+                if (currentUser.email && typeof currentUser.email === 'string') {
+                    userKey = currentUser.email.split('@')[0];
+                } else if (currentUser.uid) {
+                    userKey = currentUser.uid;
+                }
+                const savedProfile = localStorage.getItem('userProfile_' + userKey);
+                
+                if (savedProfile) {
+                    const profile = JSON.parse(savedProfile);
+                    document.getElementById('profileNickname').value = profile.name || profile.nickname || '';
+                    document.getElementById('profileDescription').value = profile.description || '';
+                    document.getElementById('profileFavoriteType').value = profile.favoriteType || '';
+                    document.getElementById('profileCity').value = profile.city || '';
+                    document.getElementById('profileExperience').value = profile.experience || '';
+                    
+                    // Atualizar preview do avatar
+                    if (profile.avatar) {
+                        const avatarUrl = profile.avatar.startsWith('http') 
+                            ? profile.avatar 
+                            : `https://play.pokemonshowdown.com/sprites/trainers/${profile.avatar}.png`;
+                        document.getElementById('currentAvatarPreview').src = avatarUrl;
+                    }
                 }
             }
         }
 
         function loadAvatarOptions() {
             const avatarGrid = document.getElementById('avatarGrid');
-            const currentAvatar = document.getElementById('currentAvatarPreview').src;
+            const currentAvatarSrc = document.getElementById('currentAvatarPreview').src;
             
-            avatarGrid.innerHTML = trainerAvatars.map(avatar => `
-                <img src="${avatar.url}" 
-                     alt="${avatar.name}" 
-                     class="avatar-option ${avatar.url === currentAvatar ? 'selected' : ''}" 
-                     onclick="selectAvatar('${avatar.url}')"
-                     title="${avatar.name}">
-            `).join('');
+            avatarGrid.innerHTML = trainerAvatars.map(avatar => {
+                const isSelected = currentAvatarSrc.includes(avatar.id);
+                return `
+                    <img src="${avatar.url}" 
+                         alt="${avatar.name}" 
+                         class="avatar-option ${isSelected ? 'selected' : ''}" 
+                         onclick="selectAvatar('${avatar.id}', '${avatar.url}')"
+                         title="${avatar.name}">
+                `;
+            }).join('');
         }
 
-        function selectAvatar(avatarUrl) {
+        function selectAvatar(avatarId, avatarUrl) {
             // Remover seleção anterior
             document.querySelectorAll('.avatar-option').forEach(img => {
                 img.classList.remove('selected');
@@ -5050,6 +5177,9 @@
             // Selecionar novo avatar
             event.target.classList.add('selected');
             document.getElementById('currentAvatarPreview').src = avatarUrl;
+            
+            // Salvar ID do avatar para usar no salvamento
+            document.getElementById('currentAvatarPreview').setAttribute('data-avatar-id', avatarId);
         }
 
         // Sistema de perfil de usuário
@@ -5432,13 +5562,17 @@
                             }
                             
                             // Fallback para localStorage se Firebase não funcionar
-                            if (displayName === post.user) {
+                            if (displayName === post.user && post.user.includes('@')) {
                                 const userKey = post.user.split('@')[0];
                                 const savedProfile = localStorage.getItem('userProfile_' + userKey);
                                 if (savedProfile) {
-                                    const profile = JSON.parse(savedProfile);
-                                    if (profile.nickname && profile.nickname.trim()) {
-                                        displayName = profile.nickname;
+                                    try {
+                                        const profile = JSON.parse(savedProfile);
+                                        if (profile.nickname && profile.nickname.trim()) {
+                                            displayName = profile.nickname;
+                                        }
+                                    } catch (parseError) {
+                                        console.warn('Erro ao parsear perfil para', post.user, parseError);
                                     }
                                 }
                             }
@@ -6147,13 +6281,13 @@
             
             try {
                 // Buscar dados do jogador
-                const snapshot = await database.ref(`${COLLECTION_NAME}/players`).once('value');
-                const playersData = snapshot.val() || {};
+                const snapshot = await database.ref(`${COLLECTION_NAME}/userProfiles`).once('value');
+                const usersData = snapshot.val() || {};
                 
                 let playerData = null;
-                Object.keys(playersData).forEach(id => {
-                    if (playersData[id].name === playerName) {
-                        playerData = playersData[id];
+                Object.keys(usersData).forEach(id => {
+                    if (usersData[id].name === playerName) {
+                        playerData = usersData[id];
                     }
                 });
                 
@@ -6571,21 +6705,23 @@
                 const rankingContainer = document.getElementById(`ranking${i}`);
                 
                 try {
-                    const snapshot = await database.ref(`${COLLECTION_NAME}/players`).once('value');
-                    const playersData = snapshot.val() || {};
+                    const snapshot = await database.ref(`${COLLECTION_NAME}/userProfiles`).once('value');
+                    const usersData = snapshot.val() || {};
                     
                     const players = [];
-                    Object.keys(playersData).forEach(playerId => {
-                        const data = playersData[playerId];
-                        if (data.tournaments && data.tournaments[tournamentId] && data.tournaments[tournamentId] > 0) {
+                    Object.keys(usersData).forEach(userId => {
+                        const data = usersData[userId];
+                        // Só mostrar usuários com pontos > 0 (players) e que têm pontos no torneio
+                        if (data.totalPoints && data.totalPoints > 0 && data.tournaments && data.tournaments[tournamentId] && data.tournaments[tournamentId] > 0) {
                             players.push({
-                                id: playerId,
+                                id: userId,
                                 name: data.name,
                                 totalPoints: data.totalPoints || 0,
                                 tournamentPoints: data.tournaments[tournamentId] || 0,
                                 teams: data.teams || [],
                                 rating: data.rating || 0,
-                                achievements: data.achievements || []
+                                achievements: data.achievements || [],
+                                avatar: data.avatar || 'brendan'
                             });
                         }
                     });
@@ -6605,21 +6741,23 @@
             const rankingContainer = document.getElementById('rankingGeral');
             
             try {
-                const snapshot = await database.ref(`${COLLECTION_NAME}/players`).once('value');
-                const playersData = snapshot.val() || {};
+                const snapshot = await database.ref(`${COLLECTION_NAME}/userProfiles`).once('value');
+                const usersData = snapshot.val() || {};
                 
                 const players = [];
-                Object.keys(playersData).forEach(playerId => {
-                    const data = playersData[playerId];
+                Object.keys(usersData).forEach(userId => {
+                    const data = usersData[userId];
+                    // Só mostrar usuários com pontos > 0 (players)
                     if (data.totalPoints && data.totalPoints > 0) {
                         players.push({
-                            id: playerId,
+                            id: userId,
                             name: data.name,
                             totalPoints: data.totalPoints || 0,
                             tournaments: data.tournaments || {},
                             teams: data.teams || [],
                             rating: data.rating || 0,
-                            achievements: data.achievements || []
+                            achievements: data.achievements || [],
+                            avatar: data.avatar || 'brendan'
                         });
                     }
                 });
@@ -6645,7 +6783,14 @@
                 const div = document.createElement('div');
                 div.className = 'player-card';
                 div.innerHTML = `
-                    <div class="player-info">
+                    <div class="player-ranking-avatar" onclick="openPlayerProfileFromRanking('${player.id}')" style="cursor: pointer; margin-right: 15px;">
+                        <img src="https://play.pokemonshowdown.com/sprites/trainers/${player.avatar}.png" 
+                             alt="Avatar de ${player.name}" 
+                             class="user-avatar" 
+                             title="Clique para ver o perfil de ${player.name}"
+                             style="width: 50px; height: 50px; border-radius: 50%; border: 2px solid #007bff;">
+                    </div>
+                    <div class="player-info" style="flex: 1;">
                         <h3>#${index + 1} - ${player.name}</h3>
                         <div class="rating">
                             ${'★'.repeat(Math.floor(player.rating))}${'☆'.repeat(5 - Math.floor(player.rating))}
@@ -6657,7 +6802,6 @@
                         <div class="points">Total: ${player.totalPoints}</div>
                     </div>
                 `;
-                div.onclick = () => showPlayerDetails(player);
                 container.appendChild(div);
             });
         }
@@ -6689,7 +6833,14 @@
                 });
                 
                 div.innerHTML = `
-                    <div class="player-info">
+                    <div class="player-ranking-avatar" onclick="openPlayerProfileFromRanking('${player.id}')" style="cursor: pointer; margin-right: 15px;">
+                        <img src="https://play.pokemonshowdown.com/sprites/trainers/${player.avatar}.png" 
+                             alt="Avatar de ${player.name}" 
+                             class="user-avatar" 
+                             title="Clique para ver o perfil de ${player.name}"
+                             style="width: 50px; height: 50px; border-radius: 50%; border: 2px solid #007bff;">
+                    </div>
+                    <div class="player-info" style="flex: 1;">
                         <h3>#${index + 1} - ${player.name}</h3>
                         <div class="rating">
                             ${'★'.repeat(Math.floor(player.rating))}${'☆'.repeat(5 - Math.floor(player.rating))}
@@ -6703,7 +6854,6 @@
                         <div class="points">Total: ${player.totalPoints}</div>
                     </div>
                 `;
-                div.onclick = () => showPlayerDetails(player);
                 container.appendChild(div);
             });
         }
@@ -6761,9 +6911,10 @@
                 <div class="modern-profile-container">
                     <div class="profile-header-card">
                         <div class="profile-avatar">
-                            <div class="avatar-circle">
-                                <span class="avatar-initial">${player.name.charAt(0).toUpperCase()}</span>
-                            </div>
+                            <img src="https://play.pokemonshowdown.com/sprites/trainers/${player.avatar || 'brendan'}.png" 
+                                 alt="Avatar de ${player.name}" 
+                                 class="avatar-circle"
+                                 style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid #007bff;">
                         </div>
                         <div class="profile-main-info">
                             <h2 class="profile-name">${player.name}</h2>
@@ -7084,12 +7235,13 @@
 
         async function getPlayerPosition(playerId) {
             try {
-                const snapshot = await database.ref(`${COLLECTION_NAME}/players`).once('value');
-                const playersData = snapshot.val() || {};
+                const snapshot = await database.ref(`${COLLECTION_NAME}/userProfiles`).once('value');
+                const usersData = snapshot.val() || {};
                 
                 const players = [];
-                Object.keys(playersData).forEach(id => {
-                    const data = playersData[id];
+                Object.keys(usersData).forEach(id => {
+                    const data = usersData[id];
+                    // Só incluir usuários com pontos > 0 (players)
                     if (data.totalPoints && data.totalPoints > 0) {
                         players.push({
                             id: id,
@@ -7103,6 +7255,34 @@
                 return position || '-';
             } catch (error) {
                 return '-';
+            }
+        }
+
+        // Função para abrir perfil do ranking
+        async function openPlayerProfileFromRanking(playerId) {
+            try {
+                const snapshot = await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}`).once('value');
+                const playerData = snapshot.val();
+                
+                if (playerData) {
+                    const player = {
+                        id: playerId,
+                        name: playerData.name,
+                        totalPoints: playerData.totalPoints || 0,
+                        tournaments: playerData.tournaments || {},
+                        teams: playerData.teams || [],
+                        rating: playerData.rating || 0,
+                        achievements: playerData.achievements || [],
+                        avatar: playerData.avatar || 'brendan'
+                    };
+                    
+                    await showPlayerDetails(player);
+                } else {
+                    alert('Perfil do jogador não encontrado!');
+                }
+            } catch (error) {
+                console.error('Erro ao carregar perfil:', error);
+                alert('Erro ao carregar perfil do jogador!');
             }
         }
 
@@ -7141,7 +7321,7 @@
                 const averageRating = count > 0 ? totalRating / count : 0;
                 console.log('Nova média calculada:', averageRating);
                 
-                await database.ref(`${COLLECTION_NAME}/players/${playerId}/rating`).set(averageRating);
+                await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}/rating`).set(averageRating);
                 
                 // Recarregar dados
                 loadRankings();
@@ -7163,7 +7343,7 @@
             if (!currentUser) return;
             
             try {
-                const playerSnapshot = await database.ref(`${COLLECTION_NAME}/players/${playerId}`).once('value');
+                const playerSnapshot = await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}`).once('value');
                 const playerData = playerSnapshot.val();
                 
                 if (!playerData) return;
@@ -7187,10 +7367,10 @@
                     team.likedBy = likedBy;
                     teams[teamIndex] = team;
                     
-                    await database.ref(`${COLLECTION_NAME}/players/${playerId}/teams`).set(teams);
+                    await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}/teams`).set(teams);
                     
                     // Recarregar modal
-                    const updatedSnapshot = await database.ref(`${COLLECTION_NAME}/players/${playerId}`).once('value');
+                    const updatedSnapshot = await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}`).once('value');
                     showPlayerDetails({ id: playerId, ...updatedSnapshot.val() });
                 }
             } catch (error) {
@@ -7686,16 +7866,16 @@
 
                     try {
                         // Buscar jogador
-                        const snapshot = await database.ref(`${COLLECTION_NAME}/players`).once('value');
-                        const playersData = snapshot.val() || {};
+                        const snapshot = await database.ref(`${COLLECTION_NAME}/userProfiles`).once('value');
+                        const usersData = snapshot.val() || {};
                         
                         let playerId = null;
                         let playerData = null;
                         
-                        Object.keys(playersData).forEach(id => {
-                            if (playersData[id].name === playerName) {
+                        Object.keys(usersData).forEach(id => {
+                            if (usersData[id].name === playerName) {
                                 playerId = id;
-                                playerData = playersData[id];
+                                playerData = usersData[id];
                             }
                         });
                         
@@ -7735,7 +7915,7 @@
 
                         achievements.push(newAchievement);
                         
-                        await database.ref(`${COLLECTION_NAME}/players/${playerId}/achievements`).set(achievements);
+                        await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}/achievements`).set(achievements);
                         
                         alert('Conquista concedida com sucesso!');
                         achievementForm.reset();
@@ -7813,16 +7993,16 @@
                     
                     try {
                         // Buscar jogador
-                        const snapshot = await database.ref(`${COLLECTION_NAME}/players`).once('value');
-                        const playersData = snapshot.val() || {};
+                        const snapshot = await database.ref(`${COLLECTION_NAME}/userProfiles`).once('value');
+                        const usersData = snapshot.val() || {};
                         
                         let playerId = null;
                         let playerData = null;
                         
-                        Object.keys(playersData).forEach(id => {
-                            if (playersData[id].name === playerName) {
+                        Object.keys(usersData).forEach(id => {
+                            if (usersData[id].name === playerName) {
                                 playerId = id;
-                                playerData = playersData[id];
+                                playerData = usersData[id];
                             }
                         });
                         
@@ -7849,7 +8029,7 @@
                         }
                         
                         // Atualizar pontuação total
-                        await database.ref(`${COLLECTION_NAME}/players/${playerId}/totalPoints`).set(finalTotal);
+                        await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}/totalPoints`).set(finalTotal);
                         
                         // Registrar histórico de pontos diversos
                         const miscHistory = playerData.miscPointsHistory || [];
@@ -7864,7 +8044,7 @@
                             addedBy: currentUser.email
                         });
                         
-                        await database.ref(`${COLLECTION_NAME}/players/${playerId}/miscPointsHistory`).set(miscHistory);
+                        await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}/miscPointsHistory`).set(miscHistory);
                         
                         alert(`Pontuação atualizada para ${playerName}!\n${changeDescription}\nTotal anterior: ${currentTotal}\nTotal atual: ${finalTotal}`);
                         miscPointsForm.reset();
@@ -8347,7 +8527,7 @@
             }
             
             try {
-                const playerSnapshot = await database.ref(`${COLLECTION_NAME}/players/${playerId}`).once('value');
+                const playerSnapshot = await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}`).once('value');
                 const playerData = playerSnapshot.val();
                 
                 if (!playerData) {
@@ -8371,7 +8551,7 @@
                 
                 teams.push(newTeam);
                 
-                await database.ref(`${COLLECTION_NAME}/players/${playerId}/teams`).set(teams);
+                await database.ref(`${COLLECTION_NAME}/userProfiles/${playerId}/teams`).set(teams);
                 
                 // Limpar seleção
                 selectedTeamPokemon = [];
@@ -8483,8 +8663,102 @@
             }
         }
 
+        // Função para limpar cache antigo e dados inconsistentes
+        function clearOldCacheData() {
+            try {
+                // Versão do cache atual
+                const CACHE_VERSION = '2.1';
+                const currentVersion = localStorage.getItem('pokepoint_cache_version');
+                
+                console.log('🔍 Verificando cache - Versão atual:', currentVersion, 'Versão necessária:', CACHE_VERSION);
+                
+                if (currentVersion !== CACHE_VERSION) {
+                    console.log('🧹 Limpando cache antigo...');
+                    
+                    // Limpar localStorage antigo
+                    const keysToRemove = [];
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        if (key && (
+                            key.startsWith('userProfile_') ||
+                            key.startsWith('playerData_') ||
+                            key.startsWith('posts_') ||
+                            key.includes('bot') ||
+                            key.includes('player_') ||
+                            key.includes('user_')
+                        )) {
+                            keysToRemove.push(key);
+                        }
+                    }
+                    
+                    console.log('🗑️ Removendo chaves:', keysToRemove);
+                    keysToRemove.forEach(key => {
+                        localStorage.removeItem(key);
+                        console.log(`✅ Removido: ${key}`);
+                    });
+                    
+                    // Atualizar versão do cache
+                    localStorage.setItem('pokepoint_cache_version', CACHE_VERSION);
+                    console.log('✅ Cache limpo e atualizado para versão ' + CACHE_VERSION);
+                    
+                    // Recarregar a página para aplicar mudanças
+                    setTimeout(() => {
+                        console.log('🔄 Recarregando página para aplicar limpeza...');
+                        window.location.reload();
+                    }, 1000);
+                } else {
+                    console.log('✅ Cache está atualizado');
+                }
+            } catch (error) {
+                console.error('❌ Erro ao limpar cache:', error);
+            }
+        }
+
+        // Função para adicionar botão de reset de emergência
+        function addEmergencyResetButton() {
+            const resetBtn = document.createElement('button');
+            resetBtn.innerHTML = '🔄 Reset Completo';
+            resetBtn.style.cssText = `
+                position: fixed;
+                top: 10px;
+                right: 10px;
+                z-index: 9999;
+                background: #e74c3c;
+                color: white;
+                border: none;
+                padding: 10px;
+                border-radius: 5px;
+                cursor: pointer;
+                font-weight: bold;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            `;
+            
+            resetBtn.onclick = function() {
+                if (confirm('⚠️ Isso vai limpar TODOS os dados salvos. Continuar?')) {
+                    console.log('🗑️ Executando reset completo...');
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    console.log('✅ Todos os dados limpos. Recarregando...');
+                    window.location.reload();
+                }
+            };
+            
+            document.body.appendChild(resetBtn);
+            console.log('🆘 Botão de reset de emergência adicionado');
+        }
+
         // Inicialização da página
         document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 PokePoint iniciando...');
+            
+            // Limpar cache antigo e dados inconsistentes
+            clearOldCacheData();
+            
+            // Adicionar botão de reset de emergência (apenas durante desenvolvimento)
+            if (window.location.href.includes('file://')) {
+                addEmergencyResetButton();
+            }
+            
             // Garantir que a página inicial esteja visível
             const inicioPage = document.getElementById('inicioPage');
             if (inicioPage && inicioPage.style.display === 'none') {
