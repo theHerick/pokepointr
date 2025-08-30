@@ -5327,83 +5327,6 @@
             return 'https://play.pokemonshowdown.com/sprites/trainers/brendan.png';
         }
 
-        // Carregar perfil do usuário
-        async function loadUserProfile() {
-            try {
-                const userEmail = getCurrentUserEmail();
-                const userId = userEmail.replace(/[.@]/g, '_');
-                
-                const snapshot = await database.ref(`${COLLECTION_NAME}/userProfiles/${userId}`).once('value');
-                const profileData = snapshot.val();
-                
-                if (profileData) {
-                    currentUserProfile = profileData;
-                    localStorage.setItem('pokepoint_user_profile', JSON.stringify(profileData));
-                    updateUserInterface();
-                    return true;
-                } else {
-                    // Verificar se há perfil salvo localmente
-                    const savedProfile = localStorage.getItem('pokepoint_user_profile');
-                    if (savedProfile) {
-                        currentUserProfile = JSON.parse(savedProfile);
-                        updateUserInterface();
-                        return true;
-                    }
-                    return false;
-                }
-                
-            } catch (error) {
-                console.error('Erro ao carregar perfil:', error);
-                return false;
-            }
-        }
-
-        // Atualizar interface com dados do usuário
-        function updateUserInterface() {
-            if (!currentUserProfile) return;
-            
-            // Atualizar header
-            const userInfo = document.getElementById('userInfo');
-            if (userInfo) {
-                userInfo.innerHTML = `
-                    <div class="user-profile-info">
-                        <img src="${currentUserProfile.avatar.url}" alt="${currentUserProfile.name}" class="user-profile-avatar">
-                        <div class="user-profile-details">
-                            <h4>${currentUserProfile.name} ${currentUserProfile.verified ? '✅' : ''}</h4>
-                            <p>${currentUserProfile.favoriteType ? getTypeEmoji(currentUserProfile.favoriteType) + ' ' + currentUserProfile.favoriteType : 'Treinador'}</p>
-                        </div>
-                    </div>
-                `;
-            }
-            
-            // Atualizar avatar no criar post
-            const createPostAvatar = document.getElementById('createPostAvatar');
-            if (createPostAvatar) {
-                createPostAvatar.src = currentUserProfile.avatar.url;
-            }
-        }
-
-        // Função para pegar emoji do tipo
-        function getTypeEmoji(type) {
-            const typeEmojis = {
-                fire: '🔥', water: '💧', grass: '🌱', electric: '⚡',
-                psychic: '🔮', dragon: '🐲', dark: '🌑', fairy: '🧚',
-                fighting: '👊', steel: '⚔️'
-            };
-            return typeEmojis[type] || '⭐';
-        }
-
-        // Verificar se usuário tem perfil ao fazer login
-        async function checkUserProfile() {
-            const hasProfile = await loadUserProfile();
-            
-            if (!hasProfile) {
-                // Mostrar modal de criar perfil
-                loadTrainerSelector();
-                openModal('createProfileModal');
-            }
-        }
-
         // Variable para time selecionado (global)
         window.selectedTeamPokemon = [];
 
@@ -5486,7 +5409,7 @@
                 }
                 
                 // Renderizar posts do Firebase
-                feedContainer.innerHTML = await Promise.all(posts.map(async post => {
+                const renderedPosts = await Promise.all(posts.map(async post => {
                     // Tentar obter nickname do perfil se disponível
                     let displayName = post.user;
                     try {
@@ -5578,7 +5501,9 @@
                         </div>
                     </div>
                     `;
-                }).join('');
+                }));
+                
+                feedContainer.innerHTML = renderedPosts.join('');
                 
                 console.log(`${posts.length} posts carregados do Firebase`);
                 
@@ -6153,6 +6078,7 @@
                     content: document.getElementById('postContent').value || '',
                     timestamp: new Date().toISOString(),
                     user: currentUserName,
+                    userUID: currentUser ? currentUser.uid : null,
                     verified: currentUserProfile ? (currentUserProfile.verified || false) : false,
                     avatar: currentUserAvatar,
                     likes: 0,
